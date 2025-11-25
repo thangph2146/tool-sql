@@ -25,10 +25,8 @@ function ScrollArea({
         data-slot="scroll-area-viewport"
         className={cn(
           "focus-visible:ring-ring/50 h-full w-full rounded-[inherit] transition-[color,box-shadow] outline-none focus-visible:ring-[3px] focus-visible:outline-1",
-          // Enable scrolling when content exceeds container dimensions
-          // overflow-y-auto: show vertical scrollbar when content height > container height
-          // overflow-x-auto: show horizontal scrollbar when content width > container width
-          "overflow-y-auto overflow-x-auto"
+          // Ensure viewport can scroll
+          "overflow-auto"
         )}
       >
         {children}

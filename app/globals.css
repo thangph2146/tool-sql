@@ -120,3 +120,9 @@
     @apply bg-background text-foreground;
   }
 }
+
+/* Ensure ScrollArea works correctly */
+[data-slot="scroll-area-viewport"] {
+  overflow-y: auto !important;
+  overflow-x: auto !important;
+}

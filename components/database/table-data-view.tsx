@@ -1,12 +1,20 @@
-'use client';
+"use client";
 
-import { useState, useMemo, useEffect } from 'react';
-import { X, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight, Loader2, Database } from 'lucide-react';
-import type { DatabaseName } from '@/lib/db-config';
-import { useTableData } from '@/lib/hooks/use-database-query';
-import { Button } from '@/components/ui/button';
-import { Input } from '@/components/ui/input';
-import { Field, FieldContent, FieldLabel } from '@/components/ui/field';
+import { useState, useMemo, useEffect } from "react";
+import {
+  X,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Loader2,
+  Database,
+} from "lucide-react";
+import type { DatabaseName } from "@/lib/db-config";
+import { useTableData } from "@/lib/hooks/use-database-query";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Field, FieldContent, FieldLabel } from "@/components/ui/field";
 import {
   Table,
   TableHeader,
@@ -14,7 +22,8 @@ import {
   TableHead,
   TableRow,
   TableCell,
-} from '@/components/ui/table';
+} from "@/components/ui/table";
+import { ScrollArea } from "../ui/scroll-area";
 
 interface TableDataViewProps {
   databaseName: DatabaseName;
@@ -33,13 +42,13 @@ export function TableDataView({
 }: TableDataViewProps) {
   const [page, setPage] = useState(0);
   const [limit, setLimit] = useState(100);
-  const [pageInput, setPageInput] = useState('1');
+  const [pageInput, setPageInput] = useState("1");
   const offset = page * limit;
 
   // Reset page to 0 when limit changes
   useEffect(() => {
     setPage(0);
-    setPageInput('1');
+    setPageInput("1");
   }, [limit]);
 
   const { data, isLoading, error } = useTableData(
@@ -100,7 +109,7 @@ export function TableDataView({
   };
 
   const handlePageInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === 'Enter') {
+    if (e.key === "Enter") {
       handlePageInputSubmit();
     }
   };
@@ -137,7 +146,7 @@ export function TableDataView({
         </div>
 
         {/* Content */}
-        <div className="flex-1 overflow-hidden flex flex-col min-h-0">
+        <div className="flex-1 overflow-hidden flex flex-col min-h-0 max-h-full">
           {isLoading ? (
             <div className="flex items-center justify-center py-12">
               <Loader2 className="h-6 w-6 animate-spin text-primary" />
@@ -152,39 +161,54 @@ export function TableDataView({
                 Error loading table data
               </p>
               <p className="text-xs text-muted-foreground text-center">
-                {error instanceof Error ? error.message : 'Unknown error occurred'}
+                {error instanceof Error
+                  ? error.message
+                  : "Unknown error occurred"}
               </p>
             </div>
           ) : tableData && tableData.rows.length > 0 ? (
             <>
               <div className="flex-1 border-b border-border p-4 flex flex-col min-h-0 overflow-hidden">
-                <div className="flex-1 min-h-0">
-                  <Table containerClassName="h-full max-h-full">
-                    <TableHeader>
-                      <TableRow>
-                        {tableData.columns.map((column) => (
-                          <TableHead key={column} className="font-semibold">
-                            {column}
-                          </TableHead>
-                        ))}
-                      </TableRow>
-                    </TableHeader>
-                    <TableBody>
-                      {tableData.rows.map((row, rowIndex) => (
-                        <TableRow key={rowIndex}>
+                <div className="flex-1 min-h-0" style={{ maxHeight: "100%" }}>
+                  <ScrollArea className="max-h-[500px] overflow-y-auto">
+                    <Table
+                      containerClassName="h-full"
+                      style={{ height: "100%", maxHeight: "100%" }}
+                    >
+                      <TableHeader>
+                        <TableRow>
                           {tableData.columns.map((column) => (
-                            <TableCell key={column} className="max-w-xs">
-                              <div className="truncate" title={String(row[column] ?? '')}>
-                                {row[column] !== null && row[column] !== undefined
-                                  ? String(row[column])
-                                  : <span className="text-muted-foreground italic">NULL</span>}
-                              </div>
-                            </TableCell>
+                            <TableHead key={column} className="font-semibold">
+                              {column}
+                            </TableHead>
                           ))}
                         </TableRow>
-                      ))}
-                    </TableBody>
-                  </Table>
+                      </TableHeader>
+                      <TableBody>
+                        {tableData.rows.map((row, rowIndex) => (
+                          <TableRow key={rowIndex}>
+                            {tableData.columns.map((column) => (
+                              <TableCell key={column} className="max-w-xs">
+                                <div
+                                  className="truncate"
+                                  title={String(row[column] ?? "")}
+                                >
+                                  {row[column] !== null &&
+                                  row[column] !== undefined ? (
+                                    String(row[column])
+                                  ) : (
+                                    <span className="text-muted-foreground italic">
+                                      NULL
+                                    </span>
+                                  )}
+                                </div>
+                              </TableCell>
+                            ))}
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </ScrollArea>
                 </div>
               </div>
 
@@ -192,7 +216,8 @@ export function TableDataView({
               <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 border-t border-border">
                 <div className="flex items-center gap-4 flex-wrap">
                   <div className="text-xs text-muted-foreground">
-                    Showing {offset + 1} - {Math.min(offset + limit, tableData.totalRows)} of{' '}
+                    Showing {offset + 1} -{" "}
+                    {Math.min(offset + limit, tableData.totalRows)} of{" "}
                     {tableData.totalRows} rows
                   </div>
                   <Field orientation="horizontal" className="gap-2">
@@ -243,7 +268,9 @@ export function TableDataView({
                       onKeyDown={handlePageInputKeyDown}
                       className="h-8 w-16 text-center text-xs"
                     />
-                    <span className="text-xs text-muted-foreground">of {totalPages || 1}</span>
+                    <span className="text-xs text-muted-foreground">
+                      of {totalPages || 1}
+                    </span>
                   </div>
                   <Button
                     variant="outline"
@@ -282,4 +309,3 @@ export function TableDataView({
     </div>
   );
 }
-
