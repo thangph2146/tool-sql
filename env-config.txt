@@ -1,0 +1,67 @@
+﻿```env
+# Cấu hình bắt buộc cũ (lines 1-7)
+DB_SERVER=DESKTOP-F3UFVI3\SQLEXPRESS
+DB_DATABASE=master
+DB_USE_WINDOWS_AUTH=true
+DB_USER=nextjs_user          # Nếu dùng SQL Auth
+DB_PASSWORD=NextJS@123        # Nếu dùng SQL Auth
+DB_PORT=1433                  # Tùy chọn
+DB_INSTANCE_NAME=SQLEXPRESS   # Tùy chọn
+```
+
+**Lưu ý:**
+- `DB_DATABASE` sẽ được sử dụng làm fallback cho `database_1` nếu `DATABASE_1_NAME` không được cấu hình
+- Các biến này vẫn hoạt động và được ưu tiên làm giá trị mặc định cho cả 2 database
+
+
+### Cấu hình riêng cho database_1
+
+```env
+# Server riêng cho database_1 (nếu khác server mặc định)
+# DATABASE_1_SERVER=DESKTOP-F3UFVI3
+# DATABASE_1_PORT=1433
+# DATABASE_1_INSTANCE_NAME=SQLEXPRESS
+
+# Tên database thực tế (mặc định: PSC_HRM)
+# database_1 là key hệ thống, tên database thực tế có thể cấu hình
+DATABASE_1_NAME=PSC_HRM
+
+# Authentication riêng cho database_1
+DATABASE_1_USE_WINDOWS_AUTH=false
+# Hoặc
+# DATABASE_1_USER=db1_user
+# DATABASE_1_PASSWORD=db1_password
+
+# Timeout riêng cho database_1
+DATABASE_1_CONNECTION_TIMEOUT=30000
+DATABASE_1_REQUEST_TIMEOUT=30000
+
+# Enable/Disable database_1
+DATABASE_1_ENABLED=true
+```
+
+### Cấu hình riêng cho database_2
+
+```env
+# Server riêng cho database_2 (nếu khác server mặc định)
+# DATABASE_2_SERVER=DESKTOP-F3UFVI3
+# DATABASE_2_PORT=1433
+# DATABASE_2_INSTANCE_NAME=SQLEXPRESS
+
+# Tên database thực tế (mặc định: HRM_HUB)
+# database_2 là key hệ thống, tên database thực tế có thể cấu hình
+DATABASE_2_NAME=HRM_HUB
+
+# Authentication riêng cho database_2
+DATABASE_2_USE_WINDOWS_AUTH=false
+# Hoặc
+# DATABASE_2_USER=db2_user
+# DATABASE_2_PASSWORD=db2_password
+
+# Timeout riêng cho database_2
+DATABASE_2_CONNECTION_TIMEOUT=30000
+DATABASE_2_REQUEST_TIMEOUT=30000
+
+# Enable/Disable database_2
+DATABASE_2_ENABLED=true
+```

@@ -1,0 +1,149 @@
+import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import axiosClient from '@/lib/axios-client';
+import type { DatabaseName } from '@/lib/db-config';
+
+interface ServerInfo {
+  ServerName: string;
+  Version: string;
+  CurrentDatabase: string;
+  CurrentUser: string;
+}
+
+interface TableInfo {
+  TABLE_SCHEMA: string;
+  TABLE_NAME: string;
+  TABLE_TYPE: string;
+}
+
+interface ConnectionTestResponse {
+  success: boolean;
+  message: string;
+  data: {
+    database?: string;
+    connected: boolean;
+    serverInfo?: ServerInfo;
+    connections?: Record<DatabaseName, boolean>;
+    serverInfos?: Record<string, ServerInfo>;
+  };
+  error?: string;
+}
+
+interface TablesResponse {
+  success: boolean;
+  message: string;
+  data: {
+    database?: string;
+    tables?: TableInfo[];
+    count?: number;
+    database_1?: { tables: TableInfo[]; success: boolean; error?: string };
+    database_2?: { tables: TableInfo[]; success: boolean; error?: string };
+  };
+}
+
+/**
+ * Query key factory for database queries
+ */
+export const databaseQueryKeys = {
+  all: ['databases'] as const,
+  connection: (databaseName?: DatabaseName) => 
+    [...databaseQueryKeys.all, 'connection', databaseName] as const,
+  tables: (databaseName?: DatabaseName) => 
+    [...databaseQueryKeys.all, 'tables', databaseName] as const,
+  allConnections: () => [...databaseQueryKeys.all, 'connections'] as const,
+  allTables: () => [...databaseQueryKeys.all, 'tables'] as const,
+};
+
+/**
+ * Hook to test database connection
+ */
+export function useDatabaseConnection(databaseName?: DatabaseName) {
+  return useQuery({
+    queryKey: databaseQueryKeys.connection(databaseName),
+    queryFn: async () => {
+      const url = databaseName 
+        ? `/api/db/test?database=${databaseName}`
+        : '/api/db/test';
+      const response = await axiosClient.get<ConnectionTestResponse>(url);
+      return response.data;
+    },
+    enabled: true,
+    refetchInterval: 30000, // Refetch every 30 seconds
+  });
+}
+
+/**
+ * Hook to get database tables
+ */
+export function useDatabaseTables(databaseName?: DatabaseName) {
+  return useQuery({
+    queryKey: databaseQueryKeys.tables(databaseName),
+    queryFn: async () => {
+      const url = databaseName
+        ? `/api/db/tables?database=${databaseName}`
+        : '/api/db/tables';
+      const response = await axiosClient.get<TablesResponse>(url);
+      return response.data;
+    },
+    enabled: true,
+    staleTime: 60 * 1000, // Consider data fresh for 1 minute
+  });
+}
+
+/**
+ * Mutation to test database connection
+ */
+export function useTestConnection() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (databaseName?: DatabaseName) => {
+      const url = databaseName
+        ? `/api/db/test?database=${databaseName}`
+        : '/api/db/test';
+      const response = await axiosClient.get<ConnectionTestResponse>(url);
+      return response.data;
+    },
+    onSuccess: (data, databaseName) => {
+      // Invalidate and refetch connection queries
+      if (databaseName) {
+        queryClient.invalidateQueries({ 
+          queryKey: databaseQueryKeys.connection(databaseName) 
+        });
+      } else {
+        queryClient.invalidateQueries({ 
+          queryKey: databaseQueryKeys.allConnections() 
+        });
+      }
+    },
+  });
+}
+
+/**
+ * Mutation to fetch database tables
+ */
+export function useFetchTables() {
+  const queryClient = useQueryClient();
+
+  return useMutation({
+    mutationFn: async (databaseName?: DatabaseName) => {
+      const url = databaseName
+        ? `/api/db/tables?database=${databaseName}`
+        : '/api/db/tables';
+      const response = await axiosClient.get<TablesResponse>(url);
+      return response.data;
+    },
+    onSuccess: (data, databaseName) => {
+      // Invalidate and refetch tables queries
+      if (databaseName) {
+        queryClient.invalidateQueries({ 
+          queryKey: databaseQueryKeys.tables(databaseName) 
+        });
+      } else {
+        queryClient.invalidateQueries({ 
+          queryKey: databaseQueryKeys.allTables() 
+        });
+      }
+    },
+  });
+}
+

@@ -1,6 +1,6 @@
 # Script tu dong kiem tra va khac phuc ket noi SQL Server
 # Tich hop tat ca chuc nang: Service, TCP/IP, Port, Windows Authentication, Login
-# CHAY VOI QUYEN ADMINISTRATOR de co day du chuc nang
+# CHAY VOI QUYEN ADMINISTRATOR de co day du chuc nang - powershell -ExecutionPolicy Bypass -File ".\scripts\fix-sql-connection.ps1"
 
 param(
     [string]$ServerName = "DESKTOP-F3UFVI3",

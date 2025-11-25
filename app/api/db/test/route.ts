@@ -8,7 +8,7 @@ export async function GET(request: Request) {
     const { searchParams } = new URL(request.url);
     const databaseParam = searchParams.get('database') as DatabaseName | null;
 
-    if (databaseParam && (databaseParam === 'PSC_HRM' || databaseParam === 'HRM_HUB')) {
+    if (databaseParam && (databaseParam === 'database_1' || databaseParam === 'database_2')) {
       // Test single database
       logger.info(`API test connection called for database: ${databaseParam}`, undefined, 'API_DB_TEST');
       

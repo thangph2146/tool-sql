@@ -1,7 +1,9 @@
 import sql from 'mssql';
 import * as dbManager from './db-manager';
+import type { DatabaseName } from './db-config';
 
-export type DatabaseName = 'PSC_HRM' | 'HRM_HUB';
+// Re-export DatabaseName for backward compatibility
+export type { DatabaseName } from './db-config';
 
 /**
  * Ensure string is handled as UTF-8/Unicode in SQL Server
@@ -25,20 +27,20 @@ export const executeProcedure = dbManager.executeProcedure;
 export const testConnection = dbManager.testConnection;
 export const testAllConnections = dbManager.testAllConnections;
 
-// Default database for backward compatibility (PSC_HRM)
-const DEFAULT_DATABASE: DatabaseName = 'PSC_HRM';
+// Default database for backward compatibility (database_1)
+const DEFAULT_DATABASE: DatabaseName = 'database_1';
 
 /**
- * Get or create connection pool (uses default database: PSC_HRM)
- * @deprecated Use getConnection('PSC_HRM') or getConnection('HRM_HUB') instead
+ * Get or create connection pool (uses default database: database_1)
+ * @deprecated Use getConnection('database_1') or getConnection('database_2') instead
  */
 export async function getDefaultConnection(): Promise<sql.ConnectionPool> {
   return getConnection(DEFAULT_DATABASE);
 }
 
 /**
- * Execute query on default database (PSC_HRM)
- * @deprecated Use query('PSC_HRM', queryString, params) or query('HRM_HUB', queryString, params) instead
+ * Execute query on default database (database_1)
+ * @deprecated Use query('database_1', queryString, params) or query('database_2', queryString, params) instead
  */
 export async function queryDefault<T = sql.IResult<unknown>>(
   queryString: string,
@@ -48,8 +50,8 @@ export async function queryDefault<T = sql.IResult<unknown>>(
 }
 
 /**
- * Test default database connection (PSC_HRM)
- * @deprecated Use testConnection('PSC_HRM') or testConnection('HRM_HUB') instead
+ * Test default database connection (database_1)
+ * @deprecated Use testConnection('database_1') or testConnection('database_2') instead
  */
 export async function testDefaultConnection(): Promise<boolean> {
   return testConnection(DEFAULT_DATABASE);
