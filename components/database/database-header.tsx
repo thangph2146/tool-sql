@@ -2,7 +2,8 @@
 
 import { useMemo } from 'react';
 import { Loader2, RefreshCw, Table } from 'lucide-react';
-import { cn } from '@/lib/utils';
+import { Button } from '@/components/ui/button';
+import { ButtonGroup } from '@/components/ui/button-group';
 import { useTestConnection, useFetchTables } from '@/lib/hooks/use-database-query';
 
 interface DatabaseHeaderProps {
@@ -34,45 +35,37 @@ export function DatabaseHeader({ onTestAll, onLoadAllTables }: DatabaseHeaderPro
       <h2 className="text-xl font-semibold text-foreground">
         Database Connection Status
       </h2>
-      <div className="flex items-center gap-2">
-        <button
+      <ButtonGroup orientation="horizontal">
+        <Button
           onClick={handleLoadAllTables}
           disabled={isLoading}
-          className={cn(
-            'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors',
-            'bg-secondary text-secondary-foreground hover:bg-secondary/90',
-            'disabled:opacity-50 disabled:cursor-not-allowed',
-            'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
-          )}
+          variant="secondary"
+          size="default"
           title="Load tables for all connected databases simultaneously"
         >
-          <Table className="h-4 w-4" />
+          <Table />
           <span className="hidden sm:inline">Load All Tables</span>
           <span className="sm:hidden">Load Tables</span>
-        </button>
-        <button
+        </Button>
+        <Button
           onClick={handleTestAll}
           disabled={isLoading}
-          className={cn(
-            'flex items-center gap-2 px-4 py-2 rounded-md text-sm font-medium transition-colors',
-            'bg-primary text-primary-foreground hover:bg-primary/90',
-            'disabled:opacity-50 disabled:cursor-not-allowed',
-            'focus:outline-none focus:ring-2 focus:ring-ring focus:ring-offset-2'
-          )}
+          variant="default"
+          size="default"
         >
           {isLoading ? (
             <>
-              <Loader2 className="h-4 w-4 animate-spin" />
+              <Loader2 className="animate-spin" />
               <span>Testing All...</span>
             </>
           ) : (
             <>
-              <RefreshCw className="h-4 w-4" />
+              <RefreshCw />
               <span>Test All Databases</span>
             </>
           )}
-        </button>
-      </div>
+        </Button>
+      </ButtonGroup>
     </div>
   );
 }

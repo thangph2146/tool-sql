@@ -147,3 +147,47 @@ export function useFetchTables() {
   });
 }
 
+interface TableDataResponse {
+  success: boolean;
+  message: string;
+  data: {
+    database: DatabaseName;
+    schema: string;
+    table: string;
+    columns: string[];
+    rows: Record<string, unknown>[];
+    totalRows: number;
+    hasMore: boolean;
+    limit: number;
+    offset: number;
+  };
+  error?: string;
+}
+
+/**
+ * Hook to get table data
+ */
+export function useTableData(
+  databaseName: DatabaseName | undefined,
+  schemaName: string | undefined,
+  tableName: string | undefined,
+  limit: number = 100,
+  offset: number = 0,
+  enabled: boolean = true
+) {
+  return useQuery({
+    queryKey: [...databaseQueryKeys.all, 'table-data', databaseName, schemaName, tableName, limit, offset] as const,
+    queryFn: async () => {
+      if (!databaseName || !schemaName || !tableName) {
+        throw new Error('Database, schema, and table are required');
+      }
+      const response = await axiosClient.get<TableDataResponse>(
+        `/api/db/table-data?database=${databaseName}&schema=${encodeURIComponent(schemaName)}&table=${encodeURIComponent(tableName)}&limit=${limit}&offset=${offset}`
+      );
+      return response.data;
+    },
+    enabled: enabled && !!databaseName && !!schemaName && !!tableName,
+    staleTime: 30 * 1000, // Consider data fresh for 30 seconds
+  });
+}
+

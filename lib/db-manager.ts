@@ -575,6 +575,91 @@ export async function getTableRowCount(
   }
 }
 
+/**
+ * Get table data with pagination
+ * Returns data from a specific table with limit and offset for pagination
+ */
+export async function getTableData(
+  databaseName: DatabaseName,
+  schemaName: string,
+  tableName: string,
+  limit: number = 100,
+  offset: number = 0
+): Promise<{
+  columns: string[];
+  rows: Record<string, unknown>[];
+  totalRows: number;
+  hasMore: boolean;
+}> {
+  try {
+    logger.info(`Fetching data from table: ${schemaName}.${tableName}`, {
+      database: databaseName,
+      schema: schemaName,
+      table: tableName,
+      limit,
+      offset,
+    }, 'DB_TABLE_DATA');
+
+    // Get total row count
+    const countResult = await query<{ total: number }>(databaseName, `
+      SELECT COUNT(*) as total
+      FROM [${schemaName}].[${tableName}]
+    `);
+    const totalRows = countResult.recordset[0]?.total || 0;
+
+    // Get table data with pagination
+    const dataResult = await query(databaseName, `
+      SELECT TOP ${limit} *
+      FROM (
+        SELECT *, ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) as rn
+        FROM [${schemaName}].[${tableName}]
+      ) AS t
+      WHERE t.rn > ${offset}
+      ORDER BY t.rn
+    `);
+
+    // Get rows and remove ROW_NUMBER column
+    const rows = Array.from(dataResult.recordset).map((row: unknown) => {
+      const rowObj = row as Record<string, unknown>;
+      // Remove ROW_NUMBER column from result
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { rn: _rn, ...rest } = rowObj;
+      return rest;
+    });
+
+    // Get column names from first row (excluding 'rn')
+    const columns = rows.length > 0 
+      ? Object.keys(rows[0])
+      : [];
+
+    const hasMore = offset + rows.length < totalRows;
+
+    logger.success(`Successfully fetched ${rows.length} rows from ${schemaName}.${tableName}`, {
+      database: databaseName,
+      schema: schemaName,
+      table: tableName,
+      rowsReturned: rows.length,
+      totalRows,
+      hasMore,
+    }, 'DB_TABLE_DATA');
+
+    return {
+      columns,
+      rows,
+      totalRows,
+      hasMore,
+    };
+  } catch (error) {
+    logger.error(`Error fetching data from table: ${schemaName}.${tableName}`, {
+      error,
+      database: databaseName,
+      schema: schemaName,
+      table: tableName,
+    }, 'DB_TABLE_DATA');
+    throw error;
+  }
+}
+
 // Import auto test to automatically run when module is loaded
 if (typeof window === 'undefined') {
   // Import to trigger auto test
