@@ -13,9 +13,16 @@ import { DatabaseErrorDisplay } from './database-error-display';
 
 interface DatabaseCardProps {
   databaseName: DatabaseName;
+  selectedForComparison?: {
+    left: { databaseName: DatabaseName; schema: string; table: string } | null;
+    right: { databaseName: DatabaseName; schema: string; table: string } | null;
+  };
 }
 
-export function DatabaseCard({ databaseName }: DatabaseCardProps) {
+export function DatabaseCard({
+  databaseName,
+  selectedForComparison,
+}: DatabaseCardProps) {
   // Get database config to display actual database name
   const dbConfig = useMemo(() => getDatabaseConfig(databaseName), [databaseName]);
   
@@ -171,6 +178,15 @@ export function DatabaseCard({ databaseName }: DatabaseCardProps) {
           tables={tables}
           isLoading={isTablesLoading}
           onRefresh={handleFetchTables}
+          onCompareTable={(table) => {
+            // This will be handled by parent component
+            if (window.dispatchEvent) {
+              window.dispatchEvent(
+                new CustomEvent('table-compare-request', { detail: table })
+              );
+            }
+          }}
+          selectedForComparison={selectedForComparison}
         />
       )}
 

@@ -38,11 +38,11 @@ export async function GET(request: NextRequest) {
     }
 
     // Validate limit and offset
-    if (limit < 1 || limit > 1000) {
+    if (limit < 1) {
       return NextResponse.json(
         {
           success: false,
-          message: 'Limit must be between 1 and 1000',
+          message: 'Limit must be >= 1',
           error: 'Invalid limit',
         },
         { status: 400 }

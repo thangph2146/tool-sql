@@ -32,7 +32,155 @@ interface TableDataViewProps {
   onClose?: () => void;
 }
 
-const LIMIT_OPTIONS = [10, 25, 50, 100, 200, 500];
+const LIMIT_OPTIONS = [10, 25, 50, 100, 200, 500, 1000, 2000, 5000, 10000];
+
+// Helper function to detect image type from Buffer
+function detectImageType(bufferData: number[]): string | null {
+  if (bufferData.length < 4) return null;
+  
+  // PNG signature: 89 50 4E 47
+  if (bufferData[0] === 0x89 && bufferData[1] === 0x50 && 
+      bufferData[2] === 0x4E && bufferData[3] === 0x47) {
+    return "image/png";
+  }
+  // JPEG signature: FF D8 FF
+  if (bufferData[0] === 0xFF && bufferData[1] === 0xD8 && bufferData[2] === 0xFF) {
+    return "image/jpeg";
+  }
+  // GIF signature: 47 49 46 38
+  if (bufferData[0] === 0x47 && bufferData[1] === 0x49 && 
+      bufferData[2] === 0x46 && bufferData[3] === 0x38) {
+    return "image/gif";
+  }
+  
+  return null;
+}
+
+// Helper function to convert Buffer to data URL
+function bufferToDataUrl(value: unknown): string | null {
+  let bufferData: number[] | null = null;
+  
+  // Check if it's a Buffer object (from database)
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    "data" in value &&
+    value.type === "Buffer" &&
+    Array.isArray(value.data)
+  ) {
+    bufferData = value.data as number[];
+  } else if (value instanceof Buffer) {
+    bufferData = Array.from(value);
+  }
+  
+  if (!bufferData || bufferData.length === 0) {
+    return null;
+  }
+  
+  const imageType = detectImageType(bufferData);
+  if (!imageType) {
+    return null;
+  }
+  
+  // Convert array of numbers to base64 (safe for large arrays)
+  const binaryString = bufferData.reduce((acc, byte) => acc + String.fromCharCode(byte), '');
+  const base64 = btoa(binaryString);
+  return `data:${imageType};base64,${base64}`;
+}
+
+// Helper function to format cell value for display
+function formatCellValue(value: unknown): string {
+  if (value === null || value === undefined) {
+    return "";
+  }
+
+  // Check if it's a Buffer object (from database)
+  if (
+    typeof value === "object" &&
+    value !== null &&
+    "type" in value &&
+    "data" in value &&
+    value.type === "Buffer" &&
+    Array.isArray(value.data)
+  ) {
+    const bufferData = value.data as number[];
+    const size = bufferData.length;
+    const imageType = detectImageType(bufferData);
+    
+    if (imageType) {
+      return `[Image ${imageType.split('/')[1].toUpperCase()} - ${size} bytes]`;
+    }
+    
+    return `[Binary Data - ${size} bytes]`;
+  }
+
+  // Check if it's a regular Buffer instance
+  if (value instanceof Buffer || (typeof value === "object" && value !== null && "length" in value)) {
+    try {
+      const buffer = value as { length: number };
+      return `[Binary Data - ${buffer.length} bytes]`;
+    } catch {
+      // Fall through
+    }
+  }
+
+  // For other values, convert to string
+  try {
+    if (typeof value === "object") {
+      return JSON.stringify(value);
+    }
+    return String(value);
+  } catch {
+    return "[Unable to display]";
+  }
+}
+
+// Component to render image cell
+function ImageCell({ value }: { value: unknown }) {
+  const dataUrl = bufferToDataUrl(value);
+  const displayText = formatCellValue(value);
+  
+  if (dataUrl) {
+    return (
+      <div className="flex items-center gap-2">
+        {/* eslint-disable-next-line @next/next/no-img-element */}
+        <img
+          src={dataUrl}
+          alt="Table image"
+          className="h-12 w-12 object-contain rounded border border-border cursor-pointer hover:opacity-80 transition-opacity"
+          onClick={(e) => {
+            e.stopPropagation();
+            // Open image in new window/tab
+            const newWindow = window.open();
+            if (newWindow) {
+              newWindow.document.write(`
+                <html>
+                  <head><title>Image Viewer</title></head>
+                  <body style="margin:0;display:flex;justify-content:center;align-items:center;height:100vh;background:#1a1a1a;">
+                    <img src="${dataUrl}" style="max-width:100%;max-height:100%;object-fit:contain;" />
+                  </body>
+                </html>
+              `);
+            }
+          }}
+          title="Click to view full size"
+        />
+        <span className="text-xs text-muted-foreground truncate">{displayText}</span>
+      </div>
+    );
+  }
+  
+  return (
+    <div className="truncate" title={displayText}>
+      {value !== null && value !== undefined ? (
+        displayText
+      ) : (
+        <span className="text-muted-foreground italic">NULL</span>
+      )}
+    </div>
+  );
+}
 
 export function TableDataView({
   databaseName,
@@ -287,19 +435,7 @@ export function TableDataView({
                     <TableRow key={rowIndex}>
                       {tableData.columns.map((column) => (
                         <TableCell key={column} className="max-w-xs">
-                          <div
-                            className="truncate"
-                            title={String(row[column] ?? "")}
-                          >
-                            {row[column] !== null &&
-                            row[column] !== undefined ? (
-                              String(row[column])
-                            ) : (
-                              <span className="text-muted-foreground italic">
-                                NULL
-                              </span>
-                            )}
-                          </div>
+                          <ImageCell value={row[column]} />
                         </TableCell>
                       ))}
                     </TableRow>
