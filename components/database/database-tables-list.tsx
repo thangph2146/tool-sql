@@ -1,13 +1,20 @@
-'use client';
+"use client";
 
-import { useMemo, useState } from 'react';
-import { Table, Loader2, RefreshCw } from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { Separator } from '@/components/ui/separator';
-import { ScrollArea } from '@/components/ui/scroll-area';
-import type { DatabaseName } from '@/lib/db-config';
-import { getDatabaseConfig } from '@/lib/db-config';
-import { TableDataView } from './table-data-view';
+import { useMemo, useState } from "react";
+import { Table, Loader2, RefreshCw } from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Separator } from "@/components/ui/separator";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import type { DatabaseName } from "@/lib/db-config";
+import { getDatabaseConfig } from "@/lib/db-config";
+import { TableDataView } from "./table-data-view";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+} from "@/components/ui/dialog";
 
 interface TableInfo {
   TABLE_SCHEMA: string;
@@ -34,14 +41,21 @@ export function DatabaseTablesList({
   } | null>(null);
 
   // Get database config to display actual database name
-  const dbConfig = useMemo(() => getDatabaseConfig(databaseName), [databaseName]);
-  
+  const dbConfig = useMemo(
+    () => getDatabaseConfig(databaseName),
+    [databaseName]
+  );
+
   // Memoize table count
   const tableCount = useMemo(() => tables?.length || 0, [tables]);
-  
+
   // Memoize display name
   const displayName = useMemo(() => {
-    return dbConfig.displayName || dbConfig.database || databaseName.replace('_', ' ').toUpperCase();
+    return (
+      dbConfig.displayName ||
+      dbConfig.database ||
+      databaseName.replace("_", " ").toUpperCase()
+    );
   }, [dbConfig, databaseName]);
 
   const handleTableClick = (schema: string, table: string) => {
@@ -63,7 +77,7 @@ export function DatabaseTablesList({
           </h3>
           {tables && (
             <span className="text-xs text-muted-foreground bg-muted px-2 py-0.5 rounded">
-              {tableCount} {tableCount === 1 ? 'table' : 'tables'}
+              {tableCount} {tableCount === 1 ? "table" : "tables"}
             </span>
           )}
         </div>
@@ -80,11 +94,7 @@ export function DatabaseTablesList({
             </Button>
           )}
           {!tables && !isLoading && (
-            <Button
-              onClick={onRefresh}
-              variant="ghost"
-              size="sm"
-            >
+            <Button onClick={onRefresh} variant="ghost" size="sm">
               Load Tables
             </Button>
           )}
@@ -100,12 +110,14 @@ export function DatabaseTablesList({
         </div>
       ) : tables && tables.length > 0 ? (
         <div className="space-y-2">
-          <ScrollArea className="max-h-64">
+          <ScrollArea className="max-h-64 overflow-y-auto">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pr-4">
               {tables.map((table) => (
                 <div
                   key={`${table.TABLE_SCHEMA}.${table.TABLE_NAME}`}
-                  onClick={() => handleTableClick(table.TABLE_SCHEMA, table.TABLE_NAME)}
+                  onClick={() =>
+                    handleTableClick(table.TABLE_SCHEMA, table.TABLE_NAME)
+                  }
                   className="flex items-center gap-2 p-2 rounded-md bg-background border border-border hover:bg-accent hover:border-primary/50 transition-colors cursor-pointer group"
                   title={`Click to view data: ${table.TABLE_SCHEMA}.${table.TABLE_NAME} in ${databaseName}`}
                 >
@@ -124,7 +136,8 @@ export function DatabaseTablesList({
           </ScrollArea>
           <Separator />
           <p className="text-xs text-muted-foreground text-center pt-2">
-            Showing {tableCount} {tableCount === 1 ? 'table' : 'tables'} from {displayName} database
+            Showing {tableCount} {tableCount === 1 ? "table" : "tables"} from{" "}
+            {displayName} database
           </p>
         </div>
       ) : tables && tables.length === 0 ? (
@@ -136,16 +149,32 @@ export function DatabaseTablesList({
         </div>
       ) : null}
 
-      {/* Table Data View Modal */}
-      {selectedTable && (
-        <TableDataView
-          databaseName={databaseName}
-          schemaName={selectedTable.schema}
-          tableName={selectedTable.table}
-          onClose={handleCloseTableData}
-        />
-      )}
+      {/* Table Data View Dialog */}
+      <Dialog
+        open={!!selectedTable}
+        onOpenChange={(open) => !open && handleCloseTableData()}
+      >
+        <DialogContent className="w-full p-0" showCloseButton={true}>
+          {selectedTable && (
+            <>
+              <DialogHeader className="sr-only">
+                <DialogTitle>
+                  Table Data: {selectedTable.schema}.{selectedTable.table}
+                </DialogTitle>
+                <DialogDescription>
+                  Viewing data from {selectedTable.schema}.{selectedTable.table}{" "}
+                  in {databaseName} database
+                </DialogDescription>
+              </DialogHeader>
+              <TableDataView
+                databaseName={databaseName}
+                schemaName={selectedTable.schema}
+                tableName={selectedTable.table}
+              />
+            </>
+          )}
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
-

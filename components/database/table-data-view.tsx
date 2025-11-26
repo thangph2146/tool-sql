@@ -2,13 +2,14 @@
 
 import { useState, useMemo, useEffect } from "react";
 import {
-  X,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
   ChevronsRight,
   Loader2,
   Database,
+  Filter,
+  XCircle,
 } from "lucide-react";
 import type { DatabaseName } from "@/lib/db-config";
 import { useTableData } from "@/lib/hooks/use-database-query";
@@ -23,13 +24,12 @@ import {
   TableRow,
   TableCell,
 } from "@/components/ui/table";
-import { ScrollArea } from "../ui/scroll-area";
 
 interface TableDataViewProps {
   databaseName: DatabaseName;
   schemaName: string;
   tableName: string;
-  onClose: () => void;
+  onClose?: () => void;
 }
 
 const LIMIT_OPTIONS = [10, 25, 50, 100, 200, 500];
@@ -38,11 +38,12 @@ export function TableDataView({
   databaseName,
   schemaName,
   tableName,
-  onClose,
 }: TableDataViewProps) {
   const [page, setPage] = useState(0);
   const [limit, setLimit] = useState(100);
   const [pageInput, setPageInput] = useState("1");
+  const [filters, setFilters] = useState<Record<string, string>>({});
+  const [showFilters, setShowFilters] = useState(false);
   const offset = page * limit;
 
   // Reset page to 0 when limit changes
@@ -61,6 +62,34 @@ export function TableDataView({
   );
 
   const tableData = data?.data;
+
+  // Filter rows based on filter values
+  const filteredRows = useMemo(() => {
+    if (!tableData?.rows) return [];
+
+    const activeFilters = Object.entries(filters).filter(
+      ([, value]) => value.trim() !== ""
+    );
+    if (activeFilters.length === 0) return tableData.rows;
+
+    return tableData.rows.filter((row) => {
+      return activeFilters.every(([column, filterValue]) => {
+        const cellValue = row[column];
+        if (cellValue === null || cellValue === undefined) {
+          return filterValue.toLowerCase() === "null";
+        }
+        return String(cellValue)
+          .toLowerCase()
+          .includes(filterValue.toLowerCase());
+      });
+    });
+  }, [tableData?.rows, filters]);
+
+  const filteredRowCount = filteredRows.length;
+  const hasActiveFilters = Object.values(filters).some(
+    (value) => value.trim() !== ""
+  );
+
   const totalPages = useMemo(() => {
     if (!tableData) return 0;
     return Math.ceil(tableData.totalRows / limit);
@@ -119,192 +148,276 @@ export function TableDataView({
     setLimit(newLimit);
   };
 
+  const handleFilterChange = (column: string, value: string) => {
+    setFilters((prev) => ({
+      ...prev,
+      [column]: value,
+    }));
+    // Reset to first page when filter changes
+    setPage(0);
+    setPageInput("1");
+  };
+
+  const handleClearFilters = () => {
+    setFilters({});
+    setPage(0);
+    setPageInput("1");
+  };
+
+  const handleClearFilter = (column: string) => {
+    setFilters((prev) => {
+      const newFilters = { ...prev };
+      delete newFilters[column];
+      return newFilters;
+    });
+    setPage(0);
+    setPageInput("1");
+  };
+
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/50 p-4">
-      <div className="bg-background border border-border rounded-lg shadow-lg w-full max-w-7xl max-h-[90vh] flex flex-col">
-        {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-border">
-          <div className="flex items-center gap-2">
-            <Database className="h-5 w-5 text-primary" />
-            <div>
-              <h2 className="text-lg font-semibold text-foreground">
-                {schemaName}.{tableName}
-              </h2>
-              <p className="text-xs text-muted-foreground">
-                Database: {databaseName}
-              </p>
-            </div>
+    <div className="w-full h-full flex flex-col">
+      {/* Header */}
+      <div className="flex items-center gap-2 p-4 border-b border-border">
+        <Database className="h-5 w-5 text-primary" />
+        <div>
+          <h2 className="text-lg font-semibold text-foreground">
+            {schemaName}.{tableName}
+          </h2>
+          <p className="text-xs text-muted-foreground">
+            Database: {databaseName}
+          </p>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className="flex-1 overflow-hidden flex flex-col min-h-0 max-h-full">
+        {isLoading ? (
+          <div className="flex items-center justify-center py-12">
+            <Loader2 className="h-6 w-6 animate-spin text-primary" />
+            <span className="ml-2 text-sm text-muted-foreground">
+              Loading table data...
+            </span>
           </div>
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={onClose}
-            className="h-8 w-8"
-          >
-            <X className="h-4 w-4" />
-          </Button>
-        </div>
+        ) : error ? (
+          <div className="flex flex-col items-center justify-center py-12 px-4">
+            <Database className="h-12 w-12 text-destructive mb-4 opacity-50" />
+            <p className="text-sm font-medium text-foreground mb-2">
+              Error loading table data
+            </p>
+            <p className="text-xs text-muted-foreground text-center">
+              {error instanceof Error
+                ? error.message
+                : "Unknown error occurred"}
+            </p>
+          </div>
+        ) : tableData && tableData.rows.length > 0 ? (
+          <>
+            {/* Filter Controls */}
+            <div className="border-b border-border p-2 flex items-center justify-between gap-2">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setShowFilters(!showFilters)}
+                className="gap-2"
+              >
+                <Filter className="h-4 w-4" />
+                <span className="hidden sm:inline">Filters</span>
+                {hasActiveFilters && (
+                  <span className="bg-primary text-primary-foreground rounded-full px-2 py-0.5 text-xs">
+                    {
+                      Object.values(filters).filter((v) => v.trim() !== "")
+                        .length
+                    }
+                  </span>
+                )}
+              </Button>
+              {hasActiveFilters && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  onClick={handleClearFilters}
+                  className="gap-2 text-xs"
+                >
+                  <XCircle className="h-3 w-3" />
+                  Clear All Filters
+                </Button>
+              )}
+            </div>
 
-        {/* Content */}
-        <div className="flex-1 overflow-hidden flex flex-col min-h-0 max-h-full">
-          {isLoading ? (
-            <div className="flex items-center justify-center py-12">
-              <Loader2 className="h-6 w-6 animate-spin text-primary" />
-              <span className="ml-2 text-sm text-muted-foreground">
-                Loading table data...
-              </span>
-            </div>
-          ) : error ? (
-            <div className="flex flex-col items-center justify-center py-12 px-4">
-              <Database className="h-12 w-12 text-destructive mb-4 opacity-50" />
-              <p className="text-sm font-medium text-foreground mb-2">
-                Error loading table data
-              </p>
-              <p className="text-xs text-muted-foreground text-center">
-                {error instanceof Error
-                  ? error.message
-                  : "Unknown error occurred"}
-              </p>
-            </div>
-          ) : tableData && tableData.rows.length > 0 ? (
-            <>
-              <div className="flex-1 border-b border-border p-4 flex flex-col min-h-0 overflow-hidden">
-                <div className="flex-1 min-h-0" style={{ maxHeight: "100%" }}>
-                  <ScrollArea className="max-h-[500px] overflow-y-auto">
-                    <Table
-                      containerClassName="h-full"
-                      style={{ height: "100%", maxHeight: "100%" }}
+            <Table
+              containerClassName="h-full max-h-[500px] max-w-[85vw] px-4"
+              style={{ height: "100%", maxHeight: "100%" }}
+            >
+              <TableHeader>
+                <TableRow>
+                  {tableData.columns.map((column) => (
+                    <TableHead key={column} className="font-semibold p-2">
+                      <div className="flex flex-col gap-1">
+                        <span>{column}</span>
+                        {showFilters && (
+                          <div className="relative">
+                            <Input
+                              type="text"
+                              placeholder="Filter..."
+                              value={filters[column] || ""}
+                              onChange={(e) =>
+                                handleFilterChange(column, e.target.value)
+                              }
+                              className="h-7 text-xs"
+                            />
+                            {filters[column] && (
+                              <button
+                                onClick={() => handleClearFilter(column)}
+                                className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
+                                type="button"
+                              >
+                                <XCircle className="h-3 w-3" />
+                              </button>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    </TableHead>
+                  ))}
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {filteredRows.length > 0 ? (
+                  filteredRows.map((row, rowIndex) => (
+                    <TableRow key={rowIndex}>
+                      {tableData.columns.map((column) => (
+                        <TableCell key={column} className="max-w-xs">
+                          <div
+                            className="truncate"
+                            title={String(row[column] ?? "")}
+                          >
+                            {row[column] !== null &&
+                            row[column] !== undefined ? (
+                              String(row[column])
+                            ) : (
+                              <span className="text-muted-foreground italic">
+                                NULL
+                              </span>
+                            )}
+                          </div>
+                        </TableCell>
+                      ))}
+                    </TableRow>
+                  ))
+                ) : (
+                  <TableRow>
+                    <TableCell
+                      colSpan={tableData.columns.length}
+                      className="text-center py-8 text-muted-foreground"
                     >
-                      <TableHeader>
-                        <TableRow>
-                          {tableData.columns.map((column) => (
-                            <TableHead key={column} className="font-semibold">
-                              {column}
-                            </TableHead>
-                          ))}
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {tableData.rows.map((row, rowIndex) => (
-                          <TableRow key={rowIndex}>
-                            {tableData.columns.map((column) => (
-                              <TableCell key={column} className="max-w-xs">
-                                <div
-                                  className="truncate"
-                                  title={String(row[column] ?? "")}
-                                >
-                                  {row[column] !== null &&
-                                  row[column] !== undefined ? (
-                                    String(row[column])
-                                  ) : (
-                                    <span className="text-muted-foreground italic">
-                                      NULL
-                                    </span>
-                                  )}
-                                </div>
-                              </TableCell>
-                            ))}
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </ScrollArea>
-                </div>
-              </div>
+                      No rows match the current filters
+                    </TableCell>
+                  </TableRow>
+                )}
+              </TableBody>
+            </Table>
 
-              {/* Pagination */}
-              <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 border-t border-border">
-                <div className="flex items-center gap-4 flex-wrap">
-                  <div className="text-xs text-muted-foreground">
-                    Showing {offset + 1} -{" "}
-                    {Math.min(offset + limit, tableData.totalRows)} of{" "}
-                    {tableData.totalRows} rows
-                  </div>
-                  <Field orientation="horizontal" className="gap-2">
-                    <FieldLabel className="text-xs">Rows per page:</FieldLabel>
-                    <FieldContent>
-                      <select
-                        value={limit}
-                        onChange={handleLimitChange}
-                        className="h-8 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      >
-                        {LIMIT_OPTIONS.map((opt) => (
-                          <option key={opt} value={opt}>
-                            {opt}
-                          </option>
-                        ))}
-                      </select>
-                    </FieldContent>
-                  </Field>
+            {/* Pagination */}
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 border-t border-border">
+              <div className="flex items-center gap-4 flex-wrap">
+                <div className="text-xs text-muted-foreground">
+                  {hasActiveFilters ? (
+                    <>
+                      Showing {filteredRowCount} of {tableData.totalRows} rows
+                      {filteredRowCount !== tableData.totalRows && (
+                        <span className="text-primary"> (filtered)</span>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      Showing {offset + 1} -{" "}
+                      {Math.min(offset + limit, tableData.totalRows)} of{" "}
+                      {tableData.totalRows} rows
+                    </>
+                  )}
                 </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleFirstPage}
-                    disabled={page === 0}
-                    title="First page"
-                  >
-                    <ChevronsLeft className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handlePrevious}
-                    disabled={page === 0}
-                  >
-                    <ChevronLeft className="h-4 w-4" />
-                    <span className="hidden sm:inline">Previous</span>
-                  </Button>
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs text-muted-foreground">Page</span>
-                    <Input
-                      type="number"
-                      min={1}
-                      max={totalPages || 1}
-                      value={pageInput}
-                      onChange={(e) => handlePageInputChange(e.target.value)}
-                      onBlur={handlePageInputSubmit}
-                      onKeyDown={handlePageInputKeyDown}
-                      className="h-8 w-16 text-center text-xs"
-                    />
-                    <span className="text-xs text-muted-foreground">
-                      of {totalPages || 1}
-                    </span>
-                  </div>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleNext}
-                    disabled={!tableData.hasMore}
-                  >
-                    <span className="hidden sm:inline">Next</span>
-                    <ChevronRight className="h-4 w-4" />
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={handleLastPage}
-                    disabled={!tableData.hasMore || currentPage >= totalPages}
-                    title="Last page"
-                  >
-                    <ChevronsRight className="h-4 w-4" />
-                  </Button>
-                </div>
+                <Field orientation="horizontal" className="gap-2">
+                  <FieldLabel className="text-xs">Rows per page:</FieldLabel>
+                  <FieldContent>
+                    <select
+                      value={limit}
+                      onChange={handleLimitChange}
+                      className="h-8 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    >
+                      {LIMIT_OPTIONS.map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                  </FieldContent>
+                </Field>
               </div>
-            </>
-          ) : tableData && tableData.rows.length === 0 ? (
-            <div className="flex flex-col items-center justify-center py-12">
-              <Database className="h-12 w-12 text-muted-foreground mb-4 opacity-50" />
-              <p className="text-sm font-medium text-foreground mb-2">
-                No data found
-              </p>
-              <p className="text-xs text-muted-foreground">
-                This table is empty
-              </p>
+              <div className="flex items-center gap-2 flex-wrap">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleFirstPage}
+                  disabled={page === 0}
+                  title="First page"
+                >
+                  <ChevronsLeft className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handlePrevious}
+                  disabled={page === 0}
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                  <span className="hidden sm:inline">Previous</span>
+                </Button>
+                <div className="flex items-center gap-2">
+                  <span className="text-xs text-muted-foreground">Page</span>
+                  <Input
+                    type="number"
+                    min={1}
+                    max={totalPages || 1}
+                    value={pageInput}
+                    onChange={(e) => handlePageInputChange(e.target.value)}
+                    onBlur={handlePageInputSubmit}
+                    onKeyDown={handlePageInputKeyDown}
+                    className="h-8 w-16 text-center text-xs"
+                  />
+                  <span className="text-xs text-muted-foreground">
+                    of {totalPages || 1}
+                  </span>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleNext}
+                  disabled={!tableData.hasMore}
+                >
+                  <span className="hidden sm:inline">Next</span>
+                  <ChevronRight className="h-4 w-4" />
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleLastPage}
+                  disabled={!tableData.hasMore || currentPage >= totalPages}
+                  title="Last page"
+                >
+                  <ChevronsRight className="h-4 w-4" />
+                </Button>
+              </div>
             </div>
-          ) : null}
-        </div>
+          </>
+        ) : tableData && tableData.rows.length === 0 ? (
+          <div className="flex flex-col items-center justify-center py-12">
+            <Database className="h-12 w-12 text-muted-foreground mb-4 opacity-50" />
+            <p className="text-sm font-medium text-foreground mb-2">
+              No data found
+            </p>
+            <p className="text-xs text-muted-foreground">This table is empty</p>
+          </div>
+        ) : null}
       </div>
     </div>
   );

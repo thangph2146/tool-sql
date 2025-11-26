@@ -13,7 +13,9 @@ function Table({ className, containerClassName, ...props }: TableProps) {
   return (
     <ScrollArea
       data-slot="table-container"
-      className={cn("relative w-full", containerClassName)}
+      className={cn(
+        containerClassName
+      )}
     >
       <table
         data-slot="table"
