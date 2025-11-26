@@ -6,9 +6,14 @@ import {
   Database,
   GitCompare,
   Settings2,
+  Filter,
+  XCircle,
 } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
 import type { DatabaseName } from "@/lib/db-config";
 import { useTableData } from "@/lib/hooks/use-database-query";
+import { useTableFilters } from "@/lib/hooks/use-table-filters";
+import { useTableComparison } from "@/lib/hooks/use-table-comparison";
 import {
   Table,
   TableHeader,
@@ -25,8 +30,12 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { InputGroup, InputGroupInput, InputGroupButton, InputGroupAddon } from "@/components/ui/input-group";
 import { ScrollArea } from "@radix-ui/react-scroll-area";
 import { cn } from "@/lib/utils";
+import { TableCell as TableCellComponent } from "@/components/database/table-cell";
+import { TABLE_COMPARISON_LIMIT_OPTIONS, DEFAULT_TABLE_LIMIT } from "@/lib/constants/table-constants";
+import { categorizeColumns, getColumnsToDisplay } from "@/lib/utils/table-column-utils";
 
 interface TableComparisonViewProps {
   leftTable: {
@@ -44,156 +53,6 @@ interface TableComparisonViewProps {
   asDialog?: boolean;
 }
 
-const LIMIT_OPTIONS = [10, 25, 50, 100, 200, 500, 1000];
-
-// Helper function to detect image type from Buffer
-function detectImageType(bufferData: number[]): string | null {
-  if (bufferData.length < 4) return null;
-  
-  // PNG signature: 89 50 4E 47
-  if (bufferData[0] === 0x89 && bufferData[1] === 0x50 && 
-      bufferData[2] === 0x4E && bufferData[3] === 0x47) {
-    return "image/png";
-  }
-  // JPEG signature: FF D8 FF
-  if (bufferData[0] === 0xFF && bufferData[1] === 0xD8 && bufferData[2] === 0xFF) {
-    return "image/jpeg";
-  }
-  // GIF signature: 47 49 46 38
-  if (bufferData[0] === 0x47 && bufferData[1] === 0x49 && 
-      bufferData[2] === 0x46 && bufferData[3] === 0x38) {
-    return "image/gif";
-  }
-  
-  return null;
-}
-
-// Helper function to convert Buffer to data URL
-function bufferToDataUrl(value: unknown): string | null {
-  let bufferData: number[] | null = null;
-  
-  // Check if it's a Buffer object (from database)
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    "type" in value &&
-    "data" in value &&
-    value.type === "Buffer" &&
-    Array.isArray(value.data)
-  ) {
-    bufferData = value.data as number[];
-  } else if (value instanceof Buffer) {
-    bufferData = Array.from(value);
-  }
-  
-  if (!bufferData || bufferData.length === 0) {
-    return null;
-  }
-  
-  const imageType = detectImageType(bufferData);
-  if (!imageType) {
-    return null;
-  }
-  
-  // Convert array of numbers to base64 (safe for large arrays)
-  const binaryString = bufferData.reduce((acc, byte) => acc + String.fromCharCode(byte), '');
-  const base64 = btoa(binaryString);
-  return `data:${imageType};base64,${base64}`;
-}
-
-// Helper function to format cell value for display
-function formatCellValue(value: unknown): string {
-  if (value === null || value === undefined) {
-    return "";
-  }
-
-  // Check if it's a Buffer object (from database)
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    "type" in value &&
-    "data" in value &&
-    value.type === "Buffer" &&
-    Array.isArray(value.data)
-  ) {
-    const bufferData = value.data as number[];
-    const size = bufferData.length;
-    const imageType = detectImageType(bufferData);
-    
-    if (imageType) {
-      return `[Image ${imageType.split('/')[1].toUpperCase()} - ${size} bytes]`;
-    }
-    
-    return `[Binary Data - ${size} bytes]`;
-  }
-
-  // Check if it's a regular Buffer instance
-  if (value instanceof Buffer || (typeof value === "object" && value !== null && "length" in value)) {
-    try {
-      const buffer = value as { length: number };
-      return `[Binary Data - ${buffer.length} bytes]`;
-    } catch {
-      // Fall through
-    }
-  }
-
-  // For other values, convert to string
-  try {
-    if (typeof value === "object") {
-      return JSON.stringify(value);
-    }
-    return String(value);
-  } catch {
-    return "[Unable to display]";
-  }
-}
-
-// Component to render image cell
-function ImageCell({ value }: { value: unknown }) {
-  const dataUrl = bufferToDataUrl(value);
-  const displayText = formatCellValue(value);
-  
-  if (dataUrl) {
-    return (
-      <div className="flex items-center gap-2">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={dataUrl}
-          alt="Table image"
-          className="h-12 w-12 object-contain rounded border border-border cursor-pointer hover:opacity-80 transition-opacity"
-          onClick={(e) => {
-            e.stopPropagation();
-            // Open image in new window/tab
-            const newWindow = window.open();
-            if (newWindow) {
-              newWindow.document.write(`
-                <html>
-                  <head><title>Image Viewer</title></head>
-                  <body style="margin:0;display:flex;justify-content:center;align-items:center;height:100vh;background:#1a1a1a;">
-                    <img src="${dataUrl}" style="max-width:100%;max-height:100%;object-fit:contain;" />
-                  </body>
-                </html>
-              `);
-            }
-          }}
-          title="Click to view full size"
-        />
-        <span className="text-xs text-muted-foreground truncate">{displayText}</span>
-      </div>
-    );
-  }
-  
-  return (
-    <div className="truncate" title={displayText}>
-      {value !== null && value !== undefined ? (
-        displayText
-      ) : (
-        <span className="text-muted-foreground italic">NULL</span>
-      )}
-    </div>
-  );
-}
-
 export function TableComparisonView({
   leftTable,
   rightTable,
@@ -201,9 +60,10 @@ export function TableComparisonView({
   open = true,
   asDialog = false,
 }: TableComparisonViewProps) {
-  const [limit, setLimit] = useState(100);
+  const [limit, setLimit] = useState(DEFAULT_TABLE_LIMIT);
   const [page, setPage] = useState(0);
   const [showColumnSelector, setShowColumnSelector] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
   const offset = page * limit;
 
   // Fetch data for both tables
@@ -236,84 +96,30 @@ export function TableComparisonView({
     return Array.from(uniqueCols).sort();
   }, [leftTableData?.columns, rightTableData?.columns]);
 
-  // Categorize columns by table
+  // Categorize columns by table using utility function
   const columnCategories = useMemo(() => {
     if (!leftTableData?.columns || !rightTableData?.columns) {
       return { leftOnly: [], rightOnly: [], both: [] };
     }
-    
-    const leftCols = leftTableData.columns;
-    const rightCols = rightTableData.columns;
-    
-    // Create normalized sets for comparison (trimmed)
-    const leftColsNormalized = leftCols.map(c => String(c).trim().toLowerCase());
-    const rightColsNormalized = rightCols.map(c => String(c).trim().toLowerCase());
-    const leftColsSet = new Set(leftColsNormalized);
-    const rightColsSet = new Set(rightColsNormalized);
-    
-    // Create maps from normalized to original column names
-    const leftColsMap = new Map<string, string>();
-    leftCols.forEach((col, idx) => {
-      const normalized = leftColsNormalized[idx];
-      if (!leftColsMap.has(normalized)) {
-        leftColsMap.set(normalized, col);
-      }
-    });
-    
-    const rightColsMap = new Map<string, string>();
-    rightCols.forEach((col, idx) => {
-      const normalized = rightColsNormalized[idx];
-      if (!rightColsMap.has(normalized)) {
-        rightColsMap.set(normalized, col);
-      }
-    });
-    
-    const leftOnly: string[] = [];
-    const rightOnly: string[] = [];
-    const both: string[] = [];
-    
-    // Check each column from left table
-    leftCols.forEach((col, idx) => {
-      const normalized = leftColsNormalized[idx];
-      const inRight = rightColsSet.has(normalized);
-      
-      if (inRight) {
-        // Column exists in both tables
-        const rightCol = rightColsMap.get(normalized);
-        if (rightCol && !both.includes(col) && !both.includes(rightCol)) {
-          both.push(col); // Use left column name as representative
-        }
-      } else {
-        // Column only in left table
-        if (!leftOnly.includes(col)) {
-          leftOnly.push(col);
-        }
-      }
-    });
-    
-    // Check each column from right table
-    rightCols.forEach((col, idx) => {
-      const normalized = rightColsNormalized[idx];
-      const inLeft = leftColsSet.has(normalized);
-      
-      if (!inLeft) {
-        // Column only in right table
-        if (!rightOnly.includes(col)) {
-          rightOnly.push(col);
-        }
-      }
-    });
-    
-    return { leftOnly, rightOnly, both };
+    return categorizeColumns(leftTableData.columns, rightTableData.columns);
   }, [leftTableData?.columns, rightTableData?.columns]);
 
   // Initialize selected columns (select all by default when columns change)
-  const [selectedColumns, setSelectedColumns] = useState<Set<string>>(() => new Set());
+  const [selectedColumns, setSelectedColumns] = useState<Set<string>>(() => {
+    // Lazy initialization - will be set in useEffect
+    return new Set();
+  });
 
   // Update selected columns when allColumns changes (select all by default)
   useEffect(() => {
     if (allColumns.length > 0) {
-      setSelectedColumns(new Set(allColumns));
+      setSelectedColumns((prev) => {
+        // Only update if empty
+        if (prev.size === 0) {
+          return new Set(allColumns);
+        }
+        return prev;
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [allColumns.length]); // Only depend on length to avoid infinite loop
@@ -323,85 +129,53 @@ export function TableComparisonView({
     return allColumns.filter(col => selectedColumns.has(col));
   }, [allColumns, selectedColumns]);
 
-  // Get columns to display for left table (only selected columns that exist in left table, preserving original order and original column names)
+  // Get columns to display using utility function
   const leftColumnsToDisplay = useMemo(() => {
     if (!leftTableData?.columns) return [];
-    const selectedSet = new Set(columnsToCompare.map(c => String(c).trim()));
-    // Preserve original order and original column names from leftTableData.columns
-    return leftTableData.columns.filter(col => {
-      const colTrimmed = String(col).trim();
-      return selectedSet.has(colTrimmed);
-    });
-  }, [columnsToCompare, leftTableData?.columns]);
+    return getColumnsToDisplay(leftTableData.columns, selectedColumns);
+  }, [selectedColumns, leftTableData?.columns]);
 
-  // Get columns to display for right table (only selected columns that exist in right table, preserving original order and original column names)
   const rightColumnsToDisplay = useMemo(() => {
     if (!rightTableData?.columns) return [];
-    const selectedSet = new Set(columnsToCompare.map(c => String(c).trim()));
-    // Preserve original order and original column names from rightTableData.columns
-    return rightTableData.columns.filter(col => {
-      const colTrimmed = String(col).trim();
-      return selectedSet.has(colTrimmed);
-    });
-  }, [columnsToCompare, rightTableData?.columns]);
+    return getColumnsToDisplay(rightTableData.columns, selectedColumns);
+  }, [selectedColumns, rightTableData?.columns]);
 
-  // Compare rows and find differences
-  const comparisonResult = useMemo(() => {
-    if (!leftTableData || !rightTableData) return null;
+  // Use filters hook for left table
+  const leftTableFilters = useTableFilters({
+    rows: leftTableData?.rows || [],
+  });
 
-    const leftRows = leftTableData.rows || [];
-    const rightRows = rightTableData.rows || [];
+  // Use filters hook for right table
+  const rightTableFilters = useTableFilters({
+    rows: rightTableData?.rows || [],
+  });
 
-    // Create maps for quick lookup using row index as key (since we're comparing by position)
-    const differences: Map<number, {
-      leftRow?: Record<string, unknown>;
-      rightRow?: Record<string, unknown>;
-      status: "same" | "different" | "left-only" | "right-only";
-      diffColumns?: string[];
-    }> = new Map();
+  // Compare rows using optimized hook
+  const comparisonResult = useTableComparison({
+    leftRows: leftTableFilters.filteredRows,
+    rightRows: rightTableFilters.filteredRows,
+    columnsToCompare,
+  });
 
-    const maxRows = Math.max(leftRows.length, rightRows.length);
-
-    for (let i = 0; i < maxRows; i++) {
-      const leftRow = leftRows[i];
-      const rightRow = rightRows[i];
-
-      if (!leftRow && rightRow) {
-        differences.set(i, {
-          rightRow,
-          status: "right-only",
-        });
-      } else if (leftRow && !rightRow) {
-        differences.set(i, {
-          leftRow,
-          status: "left-only",
-        });
-      } else if (leftRow && rightRow) {
-        // Compare values (only for selected columns)
-        const diffColumns: string[] = [];
-        columnsToCompare.forEach((col) => {
-          const leftVal = leftRow[col];
-          const rightVal = rightRow[col];
-          // Deep comparison for objects/arrays
-          if (JSON.stringify(leftVal) !== JSON.stringify(rightVal)) {
-            diffColumns.push(col);
-          }
-        });
-
-        differences.set(i, {
-          leftRow,
-          rightRow,
-          status: diffColumns.length > 0 ? "different" : "same",
-          diffColumns,
-        });
-      }
-    }
-
-    return differences;
-  }, [leftTableData, rightTableData, columnsToCompare]);
-
-  const isLoading = leftData.isLoading || rightData.isLoading;
-  const hasError = leftData.error || rightData.error;
+  // Memoize computed values for performance
+  const isLoading = useMemo(() => leftData.isLoading || rightData.isLoading, [leftData.isLoading, rightData.isLoading]);
+  const hasError = useMemo(() => leftData.error || rightData.error, [leftData.error, rightData.error]);
+  
+  // Memoize active filter counts
+  const leftActiveFilterCount = useMemo(
+    () => Object.values(leftTableFilters.filters).filter((v) => v.trim() !== "").length,
+    [leftTableFilters.filters]
+  );
+  const rightActiveFilterCount = useMemo(
+    () => Object.values(rightTableFilters.filters).filter((v) => v.trim() !== "").length,
+    [rightTableFilters.filters]
+  );
+  
+  // Memoize difference count
+  const differenceCount = useMemo(
+    () => comparisonResult ? Array.from(comparisonResult.values()).filter((d) => d.status !== "same").length : 0,
+    [comparisonResult]
+  );
 
   const content = (
     <div className="w-full h-full flex flex-col">
@@ -460,10 +234,7 @@ export function TableComparisonView({
                   </span>
                   {comparisonResult && (
                     <span className="text-primary font-medium">
-                      Differences:{" "}
-                      {Array.from(comparisonResult.values()).filter(
-                        (d) => d.status !== "same"
-                      ).length}
+                      Differences: {differenceCount}
                     </span>
                   )}
                   <span className="text-muted-foreground">
@@ -491,7 +262,7 @@ export function TableComparisonView({
                     }}
                     className="h-7 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                   >
-                    {LIMIT_OPTIONS.map((opt) => (
+                    {TABLE_COMPARISON_LIMIT_OPTIONS.map((opt) => (
                       <option key={opt} value={opt}>
                         {opt}
                       </option>
@@ -608,9 +379,9 @@ export function TableComparisonView({
                                 <span className="flex-1 truncate" title={column}>
                                   {column}
                                 </span>
-                                <span className="text-xs text-blue-600 dark:text-blue-400 font-medium" title="Only in left table">
+                                <Badge variant="outline" className="text-xs text-blue-600 dark:text-blue-400 border-blue-500/50" title="Only in left table">
                                   L
-                                </span>
+                                </Badge>
                               </label>
                             );
                           })}
@@ -657,9 +428,9 @@ export function TableComparisonView({
                                 <span className="flex-1 truncate" title={column}>
                                   {column}
                                 </span>
-                                <span className="text-xs text-green-600 dark:text-green-400 font-medium" title="Only in right table">
+                                <Badge variant="outline" className="text-xs text-green-600 dark:text-green-400 border-green-500/50" title="Only in right table">
                                   R
-                                </span>
+                                </Badge>
                               </label>
                             );
                           })}
@@ -677,33 +448,95 @@ export function TableComparisonView({
               {/* Left Table */}
               <div className="flex flex-col border-r border-border min-h-0">
                 <div className="p-2 border-b border-border bg-muted/30">
-                  <div className="flex items-center gap-2">
-                    <Database className="h-4 w-4 text-primary" />
-                    <span className="text-sm font-semibold">
-                      {leftTable.databaseName}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {leftTable.schemaName}.{leftTable.tableName}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      ({leftColumnsToDisplay.length} columns)
-                    </span>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Database className="h-4 w-4 text-primary" />
+                      <span className="text-sm font-semibold">
+                        {leftTable.databaseName}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {leftTable.schemaName}.{leftTable.tableName}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        ({leftColumnsToDisplay.length} columns)
+                      </span>
+                      {leftTableFilters.hasActiveFilters && (
+                        <span className="text-xs text-muted-foreground">
+                          • Showing {leftTableFilters.filteredRowCount} of {leftTableData.rows.length} rows
+                          {leftTableFilters.filteredRowCount !== leftTableData.rows.length && (
+                            <span className="text-primary"> (filtered)</span>
+                          )}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowFilters(!showFilters)}
+                      >
+                        <Filter className="h-3 w-3" />
+                        {leftTableFilters.hasActiveFilters && (
+                          <Badge className="text-xs">
+                            {leftActiveFilterCount}
+                          </Badge>
+                        )}
+                      </Button>
+                      {leftTableFilters.hasActiveFilters && (
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={leftTableFilters.handleClearFilters}
+                        >
+                          <XCircle className="h-3 w-3" />
+                          Clear All
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <div className="flex-1 min-h-0">
-                    <Table containerClassName={cn("h-full max-w-[45vw] mx-auto px-4",showColumnSelector ? "max-h-[calc(100vh-600px)]" : "max-h-[500px]")}>
+                    <Table containerClassName={cn("h-full max-w-[48vw] mx-auto px-4",showColumnSelector ? "max-h-[calc(100vh-600px)]" : "max-h-[500px]")}>
                       <TableHeader>
                         <TableRow>
                           {leftColumnsToDisplay.map((column) => (
                             <TableHead key={column} className="font-semibold p-2 text-xs">
-                              {column}
+                              <div className="flex flex-col gap-1">
+                                <span>{column}</span>
+                                {showFilters && (
+                                  <InputGroup className="h-7">
+                                    <InputGroupInput
+                                      type="text"
+                                      placeholder="Filter..."
+                                      value={leftTableFilters.filters[column] || ""}
+                                      onChange={(e) =>
+                                        leftTableFilters.handleFilterChange(column, e.target.value)
+                                      }
+                                      className="text-xs"
+                                    />
+                                    {leftTableFilters.filters[column] && (
+                                      <InputGroupAddon align="inline-end">
+                                        <InputGroupButton
+                                          variant="ghost"
+                                          size="icon-xs"
+                                          onClick={() => leftTableFilters.handleClearFilter(column)}
+                                          type="button"
+                                          className="text-destructive hover:text-destructive/80"
+                                        >
+                                          <XCircle className="h-3 w-3" />
+                                        </InputGroupButton>
+                                      </InputGroupAddon>
+                                    )}
+                                  </InputGroup>
+                                )}
+                              </div>
                             </TableHead>
                           ))}
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {leftTableData.rows.length > 0 ? (
-                          leftTableData.rows.map((row, rowIndex) => {
+                        {leftTableFilters.filteredRows.length > 0 ? (
+                          leftTableFilters.filteredRows.map((row, rowIndex) => {
                             const diff = comparisonResult?.get(rowIndex);
                             const isDifferent =
                               diff?.status === "different" ||
@@ -730,7 +563,7 @@ export function TableComparisonView({
                                           : ""
                                       }`}
                                     >
-                                      <ImageCell value={row[column]} />
+                                      <TableCellComponent value={row[column]} />
                                     </TableCell>
                                   );
                                 })}
@@ -743,7 +576,9 @@ export function TableComparisonView({
                               colSpan={leftColumnsToDisplay.length}
                               className="text-center py-8 text-muted-foreground text-xs"
                             >
-                              No data
+                              {leftTableFilters.hasActiveFilters
+                                ? "No rows match the current filters"
+                                : "No data"}
                             </TableCell>
                           </TableRow>
                         )}
@@ -755,33 +590,95 @@ export function TableComparisonView({
               {/* Right Table */}
               <div className="flex flex-col min-h-0">
                 <div className="p-2 border-b border-border bg-muted/30">
-                  <div className="flex items-center gap-2">
-                    <Database className="h-4 w-4 text-primary" />
-                    <span className="text-sm font-semibold">
-                      {rightTable.databaseName}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      {rightTable.schemaName}.{rightTable.tableName}
-                    </span>
-                    <span className="text-xs text-muted-foreground">
-                      ({rightColumnsToDisplay.length} columns)
-                    </span>
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Database className="h-4 w-4 text-primary" />
+                      <span className="text-sm font-semibold">
+                        {rightTable.databaseName}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {rightTable.schemaName}.{rightTable.tableName}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        ({rightColumnsToDisplay.length} columns)
+                      </span>
+                      {rightTableFilters.hasActiveFilters && (
+                        <span className="text-xs text-muted-foreground">
+                          • Showing {rightTableFilters.filteredRowCount} of {rightTableData.rows.length} rows
+                          {rightTableFilters.filteredRowCount !== rightTableData.rows.length && (
+                            <span className="text-primary"> (filtered)</span>
+                          )}
+                        </span>
+                      )}
+                    </div>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => setShowFilters(!showFilters)}
+                      >
+                        <Filter className="h-3 w-3" />
+                        {rightTableFilters.hasActiveFilters && (
+                          <Badge className="text-xs">
+                            {rightActiveFilterCount}
+                          </Badge>
+                        )}
+                      </Button>
+                      {rightTableFilters.hasActiveFilters && (
+                        <Button
+                          variant="destructive"
+                          size="sm"
+                          onClick={rightTableFilters.handleClearFilters}
+                        >
+                          <XCircle className="h-3 w-3" />
+                          Clear All
+                        </Button>
+                      )}
+                    </div>
                   </div>
                 </div>
                 <div className="flex-1 min-h-0">
-                    <Table containerClassName={cn("h-full max-w-[45vw] mx-auto px-4",showColumnSelector ? "max-h-[calc(100vh-600px)]" : "max-h-[500px]")}>
+                    <Table containerClassName={cn("h-full max-w-[48vw] mx-auto px-4",showColumnSelector ? "max-h-[calc(100vh-600px)]" : "max-h-[500px]")}>
                       <TableHeader>
                         <TableRow>
                           {rightColumnsToDisplay.map((column) => (
                             <TableHead key={column} className="font-semibold p-2 text-xs">
-                              {column}
+                              <div className="flex flex-col gap-1">
+                                <span>{column}</span>
+                                {showFilters && (
+                                  <InputGroup className="h-7">
+                                    <InputGroupInput
+                                      type="text"
+                                      placeholder="Filter..."
+                                      value={rightTableFilters.filters[column] || ""}
+                                      onChange={(e) =>
+                                        rightTableFilters.handleFilterChange(column, e.target.value)
+                                      }
+                                      className="text-xs"
+                                    />
+                                    {rightTableFilters.filters[column] && (
+                                      <InputGroupAddon align="inline-end">
+                                        <InputGroupButton
+                                          variant="ghost"
+                                          size="icon-xs"
+                                          onClick={() => rightTableFilters.handleClearFilter(column)}
+                                          type="button"
+                                          className="text-destructive hover:text-destructive/80"
+                                        >
+                                          <XCircle className="h-3 w-3" />
+                                        </InputGroupButton>
+                                      </InputGroupAddon>
+                                    )}
+                                  </InputGroup>
+                                )}
+                              </div>
                             </TableHead>
                           ))}
                         </TableRow>
                       </TableHeader>
                       <TableBody>
-                        {rightTableData.rows.length > 0 ? (
-                          rightTableData.rows.map((row, rowIndex) => {
+                        {rightTableFilters.filteredRows.length > 0 ? (
+                          rightTableFilters.filteredRows.map((row, rowIndex) => {
                             const diff = comparisonResult?.get(rowIndex);
                             const isDifferent =
                               diff?.status === "different" ||
@@ -808,7 +705,7 @@ export function TableComparisonView({
                                           : ""
                                       }`}
                                     >
-                                      <ImageCell value={row[column]} />
+                                      <TableCellComponent value={row[column]} />
                                     </TableCell>
                                   );
                                 })}
@@ -821,7 +718,9 @@ export function TableComparisonView({
                               colSpan={rightColumnsToDisplay.length}
                               className="text-center py-8 text-muted-foreground text-xs"
                             >
-                              No data
+                              {rightTableFilters.hasActiveFilters
+                                ? "No rows match the current filters"
+                                : "No data"}
                             </TableCell>
                           </TableRow>
                         )}

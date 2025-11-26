@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -13,6 +13,10 @@ import {
 } from "lucide-react";
 import type { DatabaseName } from "@/lib/db-config";
 import { useTableData } from "@/lib/hooks/use-database-query";
+import { useTablePagination } from "@/lib/hooks/use-table-pagination";
+import { useTableFilters } from "@/lib/hooks/use-table-filters";
+import { TABLE_LIMIT_OPTIONS, DEFAULT_TABLE_LIMIT } from "@/lib/constants/table-constants";
+import { TableCell as TableCellComponent } from "@/components/database/table-cell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Field, FieldContent, FieldLabel } from "@/components/ui/field";
@@ -32,295 +36,82 @@ interface TableDataViewProps {
   onClose?: () => void;
 }
 
-const LIMIT_OPTIONS = [10, 25, 50, 100, 200, 500, 1000, 2000, 5000, 10000];
-
-// Helper function to detect image type from Buffer
-function detectImageType(bufferData: number[]): string | null {
-  if (bufferData.length < 4) return null;
-  
-  // PNG signature: 89 50 4E 47
-  if (bufferData[0] === 0x89 && bufferData[1] === 0x50 && 
-      bufferData[2] === 0x4E && bufferData[3] === 0x47) {
-    return "image/png";
-  }
-  // JPEG signature: FF D8 FF
-  if (bufferData[0] === 0xFF && bufferData[1] === 0xD8 && bufferData[2] === 0xFF) {
-    return "image/jpeg";
-  }
-  // GIF signature: 47 49 46 38
-  if (bufferData[0] === 0x47 && bufferData[1] === 0x49 && 
-      bufferData[2] === 0x46 && bufferData[3] === 0x38) {
-    return "image/gif";
-  }
-  
-  return null;
-}
-
-// Helper function to convert Buffer to data URL
-function bufferToDataUrl(value: unknown): string | null {
-  let bufferData: number[] | null = null;
-  
-  // Check if it's a Buffer object (from database)
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    "type" in value &&
-    "data" in value &&
-    value.type === "Buffer" &&
-    Array.isArray(value.data)
-  ) {
-    bufferData = value.data as number[];
-  } else if (value instanceof Buffer) {
-    bufferData = Array.from(value);
-  }
-  
-  if (!bufferData || bufferData.length === 0) {
-    return null;
-  }
-  
-  const imageType = detectImageType(bufferData);
-  if (!imageType) {
-    return null;
-  }
-  
-  // Convert array of numbers to base64 (safe for large arrays)
-  const binaryString = bufferData.reduce((acc, byte) => acc + String.fromCharCode(byte), '');
-  const base64 = btoa(binaryString);
-  return `data:${imageType};base64,${base64}`;
-}
-
-// Helper function to format cell value for display
-function formatCellValue(value: unknown): string {
-  if (value === null || value === undefined) {
-    return "";
-  }
-
-  // Check if it's a Buffer object (from database)
-  if (
-    typeof value === "object" &&
-    value !== null &&
-    "type" in value &&
-    "data" in value &&
-    value.type === "Buffer" &&
-    Array.isArray(value.data)
-  ) {
-    const bufferData = value.data as number[];
-    const size = bufferData.length;
-    const imageType = detectImageType(bufferData);
-    
-    if (imageType) {
-      return `[Image ${imageType.split('/')[1].toUpperCase()} - ${size} bytes]`;
-    }
-    
-    return `[Binary Data - ${size} bytes]`;
-  }
-
-  // Check if it's a regular Buffer instance
-  if (value instanceof Buffer || (typeof value === "object" && value !== null && "length" in value)) {
-    try {
-      const buffer = value as { length: number };
-      return `[Binary Data - ${buffer.length} bytes]`;
-    } catch {
-      // Fall through
-    }
-  }
-
-  // For other values, convert to string
-  try {
-    if (typeof value === "object") {
-      return JSON.stringify(value);
-    }
-    return String(value);
-  } catch {
-    return "[Unable to display]";
-  }
-}
-
-// Component to render image cell
-function ImageCell({ value }: { value: unknown }) {
-  const dataUrl = bufferToDataUrl(value);
-  const displayText = formatCellValue(value);
-  
-  if (dataUrl) {
-    return (
-      <div className="flex items-center gap-2">
-        {/* eslint-disable-next-line @next/next/no-img-element */}
-        <img
-          src={dataUrl}
-          alt="Table image"
-          className="h-12 w-12 object-contain rounded border border-border cursor-pointer hover:opacity-80 transition-opacity"
-          onClick={(e) => {
-            e.stopPropagation();
-            // Open image in new window/tab
-            const newWindow = window.open();
-            if (newWindow) {
-              newWindow.document.write(`
-                <html>
-                  <head><title>Image Viewer</title></head>
-                  <body style="margin:0;display:flex;justify-content:center;align-items:center;height:100vh;background:#1a1a1a;">
-                    <img src="${dataUrl}" style="max-width:100%;max-height:100%;object-fit:contain;" />
-                  </body>
-                </html>
-              `);
-            }
-          }}
-          title="Click to view full size"
-        />
-        <span className="text-xs text-muted-foreground truncate">{displayText}</span>
-      </div>
-    );
-  }
-  
-  return (
-    <div className="truncate" title={displayText}>
-      {value !== null && value !== undefined ? (
-        displayText
-      ) : (
-        <span className="text-muted-foreground italic">NULL</span>
-      )}
-    </div>
-  );
-}
-
 export function TableDataView({
   databaseName,
   schemaName,
   tableName,
 }: TableDataViewProps) {
-  const [page, setPage] = useState(0);
-  const [limit, setLimit] = useState(100);
-  const [pageInput, setPageInput] = useState("1");
-  const [filters, setFilters] = useState<Record<string, string>>({});
-  const [showFilters, setShowFilters] = useState(false);
-  const offset = page * limit;
+  const [limit, setLimit] = useState(DEFAULT_TABLE_LIMIT);
 
-  // Reset page to 0 when limit changes
-  useEffect(() => {
-    setPage(0);
-    setPageInput("1");
-  }, [limit]);
+  // Fetch initial data to get totalRows (minimal fetch)
+  const { data: initialData } = useTableData(
+    databaseName,
+    schemaName,
+    tableName,
+    1,
+    0,
+    true
+  );
 
+  const totalRows = initialData?.data?.totalRows || 0;
+
+  // Use pagination hook
+  const pagination = useTablePagination({
+    totalRows,
+    limit,
+    onLimitChange: useCallback((newLimit: number) => {
+      setLimit(newLimit);
+    }, []),
+  });
+
+  // Fetch data with pagination
   const { data, isLoading, error } = useTableData(
     databaseName,
     schemaName,
     tableName,
     limit,
-    offset,
+    pagination.offset,
     true
   );
 
   const tableData = data?.data;
 
-  // Filter rows based on filter values
-  const filteredRows = useMemo(() => {
-    if (!tableData?.rows) return [];
+  // Use filters hook
+  const {
+    filters,
+    showFilters,
+    setShowFilters,
+    filteredRows,
+    filteredRowCount,
+    hasActiveFilters,
+    handleFilterChange: baseHandleFilterChange,
+    handleClearFilters: baseHandleClearFilters,
+    handleClearFilter: baseHandleClearFilter,
+  } = useTableFilters({
+    rows: tableData?.rows || [],
+  });
 
-    const activeFilters = Object.entries(filters).filter(
-      ([, value]) => value.trim() !== ""
-    );
-    if (activeFilters.length === 0) return tableData.rows;
+  // Enhanced filter handlers that reset pagination - memoized with useCallback
+  const handleFilterChange = useCallback((column: string, value: string) => {
+    baseHandleFilterChange(column, value);
+    pagination.setPage(0);
+  }, [baseHandleFilterChange, pagination]);
 
-    return tableData.rows.filter((row) => {
-      return activeFilters.every(([column, filterValue]) => {
-        const cellValue = row[column];
-        if (cellValue === null || cellValue === undefined) {
-          return filterValue.toLowerCase() === "null";
-        }
-        return String(cellValue)
-          .toLowerCase()
-          .includes(filterValue.toLowerCase());
-      });
-    });
-  }, [tableData?.rows, filters]);
+  const handleClearFilters = useCallback(() => {
+    baseHandleClearFilters();
+    pagination.setPage(0);
+  }, [baseHandleClearFilters, pagination]);
 
-  const filteredRowCount = filteredRows.length;
-  const hasActiveFilters = Object.values(filters).some(
-    (value) => value.trim() !== ""
+  const handleClearFilter = useCallback((column: string) => {
+    baseHandleClearFilter(column);
+    pagination.setPage(0);
+  }, [baseHandleClearFilter, pagination]);
+
+  // Memoize active filter count
+  const activeFilterCount = useMemo(
+    () => Object.values(filters).filter((v) => v.trim() !== "").length,
+    [filters]
   );
-
-  const totalPages = useMemo(() => {
-    if (!tableData) return 0;
-    return Math.ceil(tableData.totalRows / limit);
-  }, [tableData, limit]);
-
-  const currentPage = useMemo(() => page + 1, [page]);
-
-  // Update pageInput when page changes
-  useEffect(() => {
-    setPageInput(String(currentPage));
-  }, [currentPage]);
-
-  const handlePrevious = () => {
-    if (page > 0) {
-      setPage(page - 1);
-    }
-  };
-
-  const handleNext = () => {
-    if (tableData?.hasMore) {
-      setPage(page + 1);
-    }
-  };
-
-  const handleFirstPage = () => {
-    setPage(0);
-  };
-
-  const handleLastPage = () => {
-    if (tableData && totalPages > 0) {
-      setPage(totalPages - 1);
-    }
-  };
-
-  const handlePageInputChange = (value: string) => {
-    setPageInput(value);
-  };
-
-  const handlePageInputSubmit = () => {
-    const pageNum = parseInt(pageInput, 10);
-    if (!isNaN(pageNum) && pageNum >= 1 && pageNum <= totalPages) {
-      setPage(pageNum - 1);
-    } else {
-      setPageInput(String(currentPage));
-    }
-  };
-
-  const handlePageInputKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
-    if (e.key === "Enter") {
-      handlePageInputSubmit();
-    }
-  };
-
-  const handleLimitChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const newLimit = parseInt(e.target.value, 10);
-    setLimit(newLimit);
-  };
-
-  const handleFilterChange = (column: string, value: string) => {
-    setFilters((prev) => ({
-      ...prev,
-      [column]: value,
-    }));
-    // Reset to first page when filter changes
-    setPage(0);
-    setPageInput("1");
-  };
-
-  const handleClearFilters = () => {
-    setFilters({});
-    setPage(0);
-    setPageInput("1");
-  };
-
-  const handleClearFilter = (column: string) => {
-    setFilters((prev) => {
-      const newFilters = { ...prev };
-      delete newFilters[column];
-      return newFilters;
-    });
-    setPage(0);
-    setPageInput("1");
-  };
 
   return (
     <div className="w-full h-full flex flex-col">
@@ -377,10 +168,7 @@ export function TableDataView({
                 <span className="hidden sm:inline">Filters</span>
                 {hasActiveFilters && (
                   <span className="bg-primary text-primary-foreground rounded-full px-2 py-0.5 text-xs">
-                    {
-                      Object.values(filters).filter((v) => v.trim() !== "")
-                        .length
-                    }
+                    {activeFilterCount}
                   </span>
                 )}
               </Button>
@@ -440,7 +228,7 @@ export function TableDataView({
                     <TableRow key={rowIndex}>
                       {tableData.columns.map((column) => (
                         <TableCell key={column} className="max-w-xs">
-                          <ImageCell value={row[column]} />
+                          <TableCellComponent value={row[column]} />
                         </TableCell>
                       ))}
                     </TableRow>
@@ -472,8 +260,8 @@ export function TableDataView({
                     </>
                   ) : (
                     <>
-                      Showing {offset + 1} -{" "}
-                      {Math.min(offset + limit, tableData.totalRows)} of{" "}
+                      Showing {pagination.offset + 1} -{" "}
+                      {Math.min(pagination.offset + limit, tableData.totalRows)} of{" "}
                       {tableData.totalRows} rows ({tableData.columns.length} columns)
                     </>
                   )}
@@ -483,10 +271,10 @@ export function TableDataView({
                   <FieldContent>
                     <select
                       value={limit}
-                      onChange={handleLimitChange}
+                      onChange={pagination.handleLimitChange}
                       className="h-8 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                     >
-                      {LIMIT_OPTIONS.map((opt) => (
+                      {TABLE_LIMIT_OPTIONS.map((opt) => (
                         <option key={opt} value={opt}>
                           {opt}
                         </option>
@@ -499,8 +287,8 @@ export function TableDataView({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={handleFirstPage}
-                  disabled={page === 0}
+                  onClick={pagination.handleFirstPage}
+                  disabled={pagination.page === 0}
                   title="First page"
                 >
                   <ChevronsLeft className="h-4 w-4" />
@@ -508,8 +296,8 @@ export function TableDataView({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={handlePrevious}
-                  disabled={page === 0}
+                  onClick={pagination.handlePrevious}
+                  disabled={pagination.page === 0}
                 >
                   <ChevronLeft className="h-4 w-4" />
                   <span className="hidden sm:inline">Previous</span>
@@ -519,22 +307,22 @@ export function TableDataView({
                   <Input
                     type="number"
                     min={1}
-                    max={totalPages || 1}
-                    value={pageInput}
-                    onChange={(e) => handlePageInputChange(e.target.value)}
-                    onBlur={handlePageInputSubmit}
-                    onKeyDown={handlePageInputKeyDown}
+                    max={pagination.totalPages || 1}
+                    value={pagination.pageInput}
+                    onChange={(e) => pagination.handlePageInputChange(e.target.value)}
+                    onBlur={pagination.handlePageInputSubmit}
+                    onKeyDown={pagination.handlePageInputKeyDown}
                     className="h-8 w-16 text-center text-xs"
                   />
                   <span className="text-xs text-muted-foreground">
-                    of {totalPages || 1}
+                    of {pagination.totalPages || 1}
                   </span>
                 </div>
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={handleNext}
-                  disabled={!tableData.hasMore}
+                  onClick={pagination.handleNext}
+                  disabled={!tableData?.hasMore}
                 >
                   <span className="hidden sm:inline">Next</span>
                   <ChevronRight className="h-4 w-4" />
@@ -542,8 +330,8 @@ export function TableDataView({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={handleLastPage}
-                  disabled={!tableData.hasMore || currentPage >= totalPages}
+                  onClick={pagination.handleLastPage}
+                  disabled={!tableData?.hasMore || pagination.currentPage >= pagination.totalPages}
                   title="Last page"
                 >
                   <ChevronsRight className="h-4 w-4" />
