@@ -333,6 +333,11 @@ export function TableDataView({
           </h2>
           <p className="text-xs text-muted-foreground">
             Database: {databaseName}
+            {tableData && (
+              <span className="ml-2">
+                • {tableData.columns.length} columns
+              </span>
+            )}
           </p>
         </div>
       </div>
@@ -463,12 +468,13 @@ export function TableDataView({
                       {filteredRowCount !== tableData.totalRows && (
                         <span className="text-primary"> (filtered)</span>
                       )}
+                      <span className="ml-1">({tableData.columns.length} columns)</span>
                     </>
                   ) : (
                     <>
                       Showing {offset + 1} -{" "}
                       {Math.min(offset + limit, tableData.totalRows)} of{" "}
-                      {tableData.totalRows} rows
+                      {tableData.totalRows} rows ({tableData.columns.length} columns)
                     </>
                   )}
                 </div>

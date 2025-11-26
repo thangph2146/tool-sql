@@ -195,7 +195,6 @@ export function DatabaseTablesList({
                       className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer"
                       title={`Click to view data: ${table.TABLE_SCHEMA}.${table.TABLE_NAME} in ${databaseName}`}
                     >
-                      <Table className="h-3 w-3 text-muted-foreground flex-shrink-0 group-hover:text-primary transition-colors" />
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
                           <p className="text-xs font-medium text-foreground truncate">

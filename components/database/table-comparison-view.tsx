@@ -1,10 +1,11 @@
 "use client";
 
-import { useState, useMemo } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   Loader2,
   Database,
   GitCompare,
+  Settings2,
 } from "lucide-react";
 import type { DatabaseName } from "@/lib/db-config";
 import { useTableData } from "@/lib/hooks/use-database-query";
@@ -23,6 +24,9 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { Button } from "@/components/ui/button";
+import { ScrollArea } from "@radix-ui/react-scroll-area";
+import { cn } from "@/lib/utils";
 
 interface TableComparisonViewProps {
   leftTable: {
@@ -199,6 +203,7 @@ export function TableComparisonView({
 }: TableComparisonViewProps) {
   const [limit, setLimit] = useState(100);
   const [page, setPage] = useState(0);
+  const [showColumnSelector, setShowColumnSelector] = useState(false);
   const offset = page * limit;
 
   // Fetch data for both tables
@@ -225,11 +230,120 @@ export function TableComparisonView({
 
   // Get all unique columns from both tables
   const allColumns = useMemo(() => {
-    const leftCols = leftTableData?.columns || [];
-    const rightCols = rightTableData?.columns || [];
+    const leftCols = (leftTableData?.columns || []).map(c => String(c).trim());
+    const rightCols = (rightTableData?.columns || []).map(c => String(c).trim());
     const uniqueCols = new Set([...leftCols, ...rightCols]);
     return Array.from(uniqueCols).sort();
   }, [leftTableData?.columns, rightTableData?.columns]);
+
+  // Categorize columns by table
+  const columnCategories = useMemo(() => {
+    if (!leftTableData?.columns || !rightTableData?.columns) {
+      return { leftOnly: [], rightOnly: [], both: [] };
+    }
+    
+    const leftCols = leftTableData.columns;
+    const rightCols = rightTableData.columns;
+    
+    // Create normalized sets for comparison (trimmed)
+    const leftColsNormalized = leftCols.map(c => String(c).trim().toLowerCase());
+    const rightColsNormalized = rightCols.map(c => String(c).trim().toLowerCase());
+    const leftColsSet = new Set(leftColsNormalized);
+    const rightColsSet = new Set(rightColsNormalized);
+    
+    // Create maps from normalized to original column names
+    const leftColsMap = new Map<string, string>();
+    leftCols.forEach((col, idx) => {
+      const normalized = leftColsNormalized[idx];
+      if (!leftColsMap.has(normalized)) {
+        leftColsMap.set(normalized, col);
+      }
+    });
+    
+    const rightColsMap = new Map<string, string>();
+    rightCols.forEach((col, idx) => {
+      const normalized = rightColsNormalized[idx];
+      if (!rightColsMap.has(normalized)) {
+        rightColsMap.set(normalized, col);
+      }
+    });
+    
+    const leftOnly: string[] = [];
+    const rightOnly: string[] = [];
+    const both: string[] = [];
+    
+    // Check each column from left table
+    leftCols.forEach((col, idx) => {
+      const normalized = leftColsNormalized[idx];
+      const inRight = rightColsSet.has(normalized);
+      
+      if (inRight) {
+        // Column exists in both tables
+        const rightCol = rightColsMap.get(normalized);
+        if (rightCol && !both.includes(col) && !both.includes(rightCol)) {
+          both.push(col); // Use left column name as representative
+        }
+      } else {
+        // Column only in left table
+        if (!leftOnly.includes(col)) {
+          leftOnly.push(col);
+        }
+      }
+    });
+    
+    // Check each column from right table
+    rightCols.forEach((col, idx) => {
+      const normalized = rightColsNormalized[idx];
+      const inLeft = leftColsSet.has(normalized);
+      
+      if (!inLeft) {
+        // Column only in right table
+        if (!rightOnly.includes(col)) {
+          rightOnly.push(col);
+        }
+      }
+    });
+    
+    return { leftOnly, rightOnly, both };
+  }, [leftTableData?.columns, rightTableData?.columns]);
+
+  // Initialize selected columns (select all by default when columns change)
+  const [selectedColumns, setSelectedColumns] = useState<Set<string>>(() => new Set());
+
+  // Update selected columns when allColumns changes (select all by default)
+  useEffect(() => {
+    if (allColumns.length > 0) {
+      setSelectedColumns(new Set(allColumns));
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [allColumns.length]); // Only depend on length to avoid infinite loop
+
+  // Get columns to compare (only selected ones)
+  const columnsToCompare = useMemo(() => {
+    return allColumns.filter(col => selectedColumns.has(col));
+  }, [allColumns, selectedColumns]);
+
+  // Get columns to display for left table (only selected columns that exist in left table, preserving original order and original column names)
+  const leftColumnsToDisplay = useMemo(() => {
+    if (!leftTableData?.columns) return [];
+    const selectedSet = new Set(columnsToCompare.map(c => String(c).trim()));
+    // Preserve original order and original column names from leftTableData.columns
+    return leftTableData.columns.filter(col => {
+      const colTrimmed = String(col).trim();
+      return selectedSet.has(colTrimmed);
+    });
+  }, [columnsToCompare, leftTableData?.columns]);
+
+  // Get columns to display for right table (only selected columns that exist in right table, preserving original order and original column names)
+  const rightColumnsToDisplay = useMemo(() => {
+    if (!rightTableData?.columns) return [];
+    const selectedSet = new Set(columnsToCompare.map(c => String(c).trim()));
+    // Preserve original order and original column names from rightTableData.columns
+    return rightTableData.columns.filter(col => {
+      const colTrimmed = String(col).trim();
+      return selectedSet.has(colTrimmed);
+    });
+  }, [columnsToCompare, rightTableData?.columns]);
 
   // Compare rows and find differences
   const comparisonResult = useMemo(() => {
@@ -263,9 +377,9 @@ export function TableComparisonView({
           status: "left-only",
         });
       } else if (leftRow && rightRow) {
-        // Compare values
+        // Compare values (only for selected columns)
         const diffColumns: string[] = [];
-        allColumns.forEach((col) => {
+        columnsToCompare.forEach((col) => {
           const leftVal = leftRow[col];
           const rightVal = rightRow[col];
           // Deep comparison for objects/arrays
@@ -284,7 +398,7 @@ export function TableComparisonView({
     }
 
     return differences;
-  }, [leftTableData, rightTableData, allColumns]);
+  }, [leftTableData, rightTableData, columnsToCompare]);
 
   const isLoading = leftData.isLoading || rightData.isLoading;
   const hasError = leftData.error || rightData.error;
@@ -334,15 +448,15 @@ export function TableComparisonView({
           <div className="flex-1 flex flex-col min-h-0">
             {/* Comparison Stats */}
             <div className="border-b border-border p-2 bg-muted/50">
-              <div className="flex items-center justify-between text-xs">
-                <div className="flex items-center gap-4">
+              <div className="flex items-center justify-between text-xs flex-wrap gap-2">
+                <div className="flex items-center gap-4 flex-wrap">
                   <span className="text-muted-foreground">
                     Left: {leftTable.databaseName} ({leftTableData.totalRows}{" "}
-                    rows)
+                    rows, {leftTableData.columns.length} columns)
                   </span>
                   <span className="text-muted-foreground">
                     Right: {rightTable.databaseName} ({rightTableData.totalRows}{" "}
-                    rows)
+                    rows, {rightTableData.columns.length} columns)
                   </span>
                   {comparisonResult && (
                     <span className="text-primary font-medium">
@@ -352,8 +466,20 @@ export function TableComparisonView({
                       ).length}
                     </span>
                   )}
+                  <span className="text-muted-foreground">
+                    Comparing: {columnsToCompare.length} of {allColumns.length} columns
+                  </span>
                 </div>
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2 flex-wrap">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setShowColumnSelector(!showColumnSelector)}
+                    className="gap-2 text-xs"
+                  >
+                    <Settings2 className="h-3 w-3" />
+                    Select Columns
+                  </Button>
                   <span className="text-xs text-muted-foreground">
                     Limit:
                   </span>
@@ -373,6 +499,177 @@ export function TableComparisonView({
                   </select>
                 </div>
               </div>
+              
+              {/* Column Selector */}
+              {showColumnSelector && (
+                <div className="mt-3 p-3 border border-border rounded-md bg-background">
+                  <div className="flex items-center justify-between mb-3">
+                    <span className="text-sm font-medium">Select columns to compare:</span>
+                    <div className="flex items-center gap-2">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setSelectedColumns(new Set(allColumns))}
+                        className="text-xs h-6"
+                      >
+                        Select All
+                      </Button>
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => setSelectedColumns(new Set())}
+                        className="text-xs h-6"
+                      >
+                        Deselect All
+                      </Button>
+                    </div>
+                  </div>
+                  
+                  <div className="flex pace-y-4">
+                    {/* Common Columns (Both Tables) */}
+                    {columnCategories.both.length > 0 && (
+                      <div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="h-4 w-4 rounded bg-primary/20 border border-primary/50"></div>
+                          <span className="text-xs font-semibold text-foreground">
+                            Common Columns ({columnCategories.both.length})
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            - Present in both tables
+                          </span>
+                        </div>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 ml-6">
+                          {columnCategories.both.map((column) => {
+                            const isSelected = selectedColumns.has(column);
+                            return (
+                              <label
+                                key={column}
+                                className="flex items-center gap-2 p-1.5 rounded hover:bg-accent cursor-pointer text-xs border border-primary/20"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={(e) => {
+                                    const newSelected = new Set(selectedColumns);
+                                    if (e.target.checked) {
+                                      newSelected.add(column);
+                                    } else {
+                                      newSelected.delete(column);
+                                    }
+                                    setSelectedColumns(newSelected);
+                                  }}
+                                  className="h-4 w-4 rounded border-input cursor-pointer"
+                                />
+                                <span className="flex-1 truncate" title={column}>
+                                  {column}
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Left Table Only Columns */}
+                    {columnCategories.leftOnly.length > 0 && (
+                      <div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="h-4 w-4 rounded bg-blue-500/20 border border-blue-500/50"></div>
+                          <span className="text-xs font-semibold text-blue-600 dark:text-blue-400">
+                            Left Table Only ({columnCategories.leftOnly.length})
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            - {leftTable.databaseName}
+                          </span>
+                        </div>
+                        <ScrollArea className="max-h-[200px] overflow-y-auto">
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 ml-6">
+                          {columnCategories.leftOnly.map((column) => {
+                            const isSelected = selectedColumns.has(column);
+                            return (
+                              <label
+                                key={column}
+                                className="flex items-center gap-2 p-1.5 rounded hover:bg-accent cursor-pointer text-xs border border-blue-500/20 bg-blue-500/5"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={(e) => {
+                                    const newSelected = new Set(selectedColumns);
+                                    if (e.target.checked) {
+                                      newSelected.add(column);
+                                    } else {
+                                      newSelected.delete(column);
+                                    }
+                                    setSelectedColumns(newSelected);
+                                  }}
+                                  className="h-4 w-4 rounded border-input cursor-pointer"
+                                />
+                                <span className="flex-1 truncate" title={column}>
+                                  {column}
+                                </span>
+                                <span className="text-xs text-blue-600 dark:text-blue-400 font-medium" title="Only in left table">
+                                  L
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                        </ScrollArea>
+                      </div>
+                    )}
+
+                    {/* Right Table Only Columns */}
+                    {columnCategories.rightOnly.length > 0 && (
+                      <div>
+                        <div className="flex items-center gap-2 mb-2">
+                          <div className="h-4 w-4 rounded bg-green-500/20 border border-green-500/50"></div>
+                          <span className="text-xs font-semibold text-green-600 dark:text-green-400">
+                            Right Table Only ({columnCategories.rightOnly.length})
+                          </span>
+                          <span className="text-xs text-muted-foreground">
+                            - {rightTable.databaseName}
+                          </span>
+                        </div>
+                        <ScrollArea className="max-h-[200px] overflow-y-auto">
+                        <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 ml-6">
+                          {columnCategories.rightOnly.map((column) => {
+                            const isSelected = selectedColumns.has(column);
+                            return (
+                              <label
+                                key={column}
+                                className="flex items-center gap-2 p-1.5 rounded hover:bg-accent cursor-pointer text-xs border border-green-500/20 bg-green-500/5"
+                              >
+                                <input
+                                  type="checkbox"
+                                  checked={isSelected}
+                                  onChange={(e) => {
+                                    const newSelected = new Set(selectedColumns);
+                                    if (e.target.checked) {
+                                      newSelected.add(column);
+                                    } else {
+                                      newSelected.delete(column);
+                                    }
+                                    setSelectedColumns(newSelected);
+                                  }}
+                                  className="h-4 w-4 rounded border-input cursor-pointer"
+                                />
+                                <span className="flex-1 truncate" title={column}>
+                                  {column}
+                                </span>
+                                <span className="text-xs text-green-600 dark:text-green-400 font-medium" title="Only in right table">
+                                  R
+                                </span>
+                              </label>
+                            );
+                          })}
+                        </div>
+                        </ScrollArea>
+                      </div>
+                    )}
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Side by Side Tables */}
@@ -388,13 +685,16 @@ export function TableComparisonView({
                     <span className="text-xs text-muted-foreground">
                       {leftTable.schemaName}.{leftTable.tableName}
                     </span>
+                    <span className="text-xs text-muted-foreground">
+                      ({leftColumnsToDisplay.length} columns)
+                    </span>
                   </div>
                 </div>
                 <div className="flex-1 min-h-0">
-                    <Table containerClassName="h-full max-h-[500px] max-w-[45vw] mx-auto px-4">
+                    <Table containerClassName={cn("h-full max-w-[45vw] mx-auto px-4",showColumnSelector ? "max-h-[calc(100vh-600px)]" : "max-h-[500px]")}>
                       <TableHeader>
                         <TableRow>
-                          {leftTableData.columns.map((column) => (
+                          {leftColumnsToDisplay.map((column) => (
                             <TableHead key={column} className="font-semibold p-2 text-xs">
                               {column}
                             </TableHead>
@@ -418,7 +718,7 @@ export function TableComparisonView({
                                     : ""
                                 }
                               >
-                                {leftTableData.columns.map((column) => {
+                                {leftColumnsToDisplay.map((column) => {
                                   const isDiffColumn =
                                     diff?.diffColumns?.includes(column);
                                   return (
@@ -440,7 +740,7 @@ export function TableComparisonView({
                         ) : (
                           <TableRow>
                             <TableCell
-                              colSpan={leftTableData.columns.length}
+                              colSpan={leftColumnsToDisplay.length}
                               className="text-center py-8 text-muted-foreground text-xs"
                             >
                               No data
@@ -463,13 +763,16 @@ export function TableComparisonView({
                     <span className="text-xs text-muted-foreground">
                       {rightTable.schemaName}.{rightTable.tableName}
                     </span>
+                    <span className="text-xs text-muted-foreground">
+                      ({rightColumnsToDisplay.length} columns)
+                    </span>
                   </div>
                 </div>
                 <div className="flex-1 min-h-0">
-                    <Table containerClassName="h-full max-h-[500px] max-w-[45vw] mx-auto px-4">
+                    <Table containerClassName={cn("h-full max-w-[45vw] mx-auto px-4",showColumnSelector ? "max-h-[calc(100vh-600px)]" : "max-h-[500px]")}>
                       <TableHeader>
                         <TableRow>
-                          {rightTableData.columns.map((column) => (
+                          {rightColumnsToDisplay.map((column) => (
                             <TableHead key={column} className="font-semibold p-2 text-xs">
                               {column}
                             </TableHead>
@@ -493,7 +796,7 @@ export function TableComparisonView({
                                     : ""
                                 }
                               >
-                                {rightTableData.columns.map((column) => {
+                                {rightColumnsToDisplay.map((column) => {
                                   const isDiffColumn =
                                     diff?.diffColumns?.includes(column);
                                   return (
@@ -515,7 +818,7 @@ export function TableComparisonView({
                         ) : (
                           <TableRow>
                             <TableCell
-                              colSpan={rightTableData.columns.length}
+                              colSpan={rightColumnsToDisplay.length}
                               className="text-center py-8 text-muted-foreground text-xs"
                             >
                               No data
