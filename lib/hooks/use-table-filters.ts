@@ -4,7 +4,7 @@ interface UseTableFiltersProps<T extends Record<string, unknown>> {
   rows: T[];
 }
 
-interface UseTableFiltersReturn<T extends Record<string, unknown>> {
+export interface UseTableFiltersReturn<T extends Record<string, unknown>> {
   filters: Record<string, string>;
   setFilters: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   showFilters: boolean;

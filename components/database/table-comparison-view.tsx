@@ -6,22 +6,12 @@ import {
   Database,
   GitCompare,
   Settings2,
-  Filter,
-  XCircle,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { DatabaseName } from "@/lib/db-config";
 import { useTableData } from "@/lib/hooks/use-database-query";
 import { useTableFilters } from "@/lib/hooks/use-table-filters";
 import { useTableComparison } from "@/lib/hooks/use-table-comparison";
-import {
-  Table,
-  TableHeader,
-  TableBody,
-  TableHead,
-  TableRow,
-  TableCell,
-} from "@/components/ui/table";
 import {
   Dialog,
   DialogContent,
@@ -30,10 +20,9 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
-import { InputGroup, InputGroupInput, InputGroupButton, InputGroupAddon } from "@/components/ui/input-group";
 import { ScrollArea } from "@radix-ui/react-scroll-area";
 import { cn } from "@/lib/utils";
-import { TableCell as TableCellComponent } from "@/components/database/table-cell";
+import { ComparisonTable } from "@/components/database/comparison-table";
 import { TABLE_COMPARISON_LIMIT_OPTIONS, DEFAULT_TABLE_LIMIT } from "@/lib/constants/table-constants";
 import { categorizeColumns, getColumnsToDisplay } from "@/lib/utils/table-column-utils";
 
@@ -180,7 +169,7 @@ export function TableComparisonView({
   const content = (
     <div className="w-full h-full flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-border">
+      <div className="flex items-center justify-between border-b border-border">
         <div className="flex items-center gap-2">
           <GitCompare className="h-5 w-5 text-primary" />
           <div>
@@ -447,286 +436,44 @@ export function TableComparisonView({
             <div className="flex-1 grid grid-cols-2 gap-0 min-h-0 overflow-hidden">
               {/* Left Table */}
               <div className="flex flex-col border-r border-border min-h-0">
-                <div className="p-2 border-b border-border bg-muted/30">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Database className="h-4 w-4 text-primary" />
-                      <span className="text-sm font-semibold">
-                        {leftTable.databaseName}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        {leftTable.schemaName}.{leftTable.tableName}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        ({leftColumnsToDisplay.length} columns)
-                      </span>
-                      {leftTableFilters.hasActiveFilters && (
-                        <span className="text-xs text-muted-foreground">
-                          • Showing {leftTableFilters.filteredRowCount} of {leftTableData.rows.length} rows
-                          {leftTableFilters.filteredRowCount !== leftTableData.rows.length && (
-                            <span className="text-primary"> (filtered)</span>
-                          )}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setShowFilters(!showFilters)}
-                      >
-                        <Filter className="h-3 w-3" />
-                        {leftTableFilters.hasActiveFilters && (
-                          <Badge className="text-xs">
-                            {leftActiveFilterCount}
-                          </Badge>
-                        )}
-                      </Button>
-                      {leftTableFilters.hasActiveFilters && (
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          onClick={leftTableFilters.handleClearFilters}
-                        >
-                          <XCircle className="h-3 w-3" />
-                          Clear All
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-                <div className="flex-1 min-h-0">
-                    <Table containerClassName={cn("h-full max-w-[48vw] mx-auto px-4",showColumnSelector ? "max-h-[calc(100vh-600px)]" : "max-h-[500px]")}>
-                      <TableHeader>
-                        <TableRow>
-                          {leftColumnsToDisplay.map((column) => (
-                            <TableHead key={column} className="font-semibold p-2 text-xs">
-                              <div className="flex flex-col gap-1">
-                                <span>{column}</span>
-                                {showFilters && (
-                                  <InputGroup className="h-7">
-                                    <InputGroupInput
-                                      type="text"
-                                      placeholder="Filter..."
-                                      value={leftTableFilters.filters[column] || ""}
-                                      onChange={(e) =>
-                                        leftTableFilters.handleFilterChange(column, e.target.value)
-                                      }
-                                      className="text-xs"
-                                    />
-                                    {leftTableFilters.filters[column] && (
-                                      <InputGroupAddon align="inline-end">
-                                        <InputGroupButton
-                                          variant="ghost"
-                                          size="icon-xs"
-                                          onClick={() => leftTableFilters.handleClearFilter(column)}
-                                          type="button"
-                                          className="text-destructive hover:text-destructive/80"
-                                        >
-                                          <XCircle className="h-3 w-3" />
-                                        </InputGroupButton>
-                                      </InputGroupAddon>
-                                    )}
-                                  </InputGroup>
-                                )}
-                              </div>
-                            </TableHead>
-                          ))}
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {leftTableFilters.filteredRows.length > 0 ? (
-                          leftTableFilters.filteredRows.map((row, rowIndex) => {
-                            const diff = comparisonResult?.get(rowIndex);
-                            const isDifferent =
-                              diff?.status === "different" ||
-                              diff?.status === "left-only";
-
-                            return (
-                              <TableRow
-                                key={rowIndex}
-                                className={
-                                  isDifferent
-                                    ? "bg-destructive/10 hover:bg-destructive/20"
-                                    : ""
-                                }
-                              >
-                                {leftColumnsToDisplay.map((column) => {
-                                  const isDiffColumn =
-                                    diff?.diffColumns?.includes(column);
-                                  return (
-                                    <TableCell
-                                      key={column}
-                                      className={`max-w-xs p-2 text-xs ${
-                                        isDiffColumn
-                                          ? "bg-destructive/20 font-semibold"
-                                          : ""
-                                      }`}
-                                    >
-                                      <TableCellComponent value={row[column]} />
-                                    </TableCell>
-                                  );
-                                })}
-                              </TableRow>
-                            );
-                          })
-                        ) : (
-                          <TableRow>
-                            <TableCell
-                              colSpan={leftColumnsToDisplay.length}
-                              className="text-center py-8 text-muted-foreground text-xs"
-                            >
-                              {leftTableFilters.hasActiveFilters
-                                ? "No rows match the current filters"
-                                : "No data"}
-                            </TableCell>
-                          </TableRow>
-                        )}
-                      </TableBody>
-                    </Table>
-                </div>
+                <ComparisonTable
+                  databaseName={leftTable.databaseName}
+                  schemaName={leftTable.schemaName}
+                  tableName={leftTable.tableName}
+                  columns={leftColumnsToDisplay}
+                  rows={leftTableData.rows}
+                  filters={leftTableFilters}
+                  showFilters={showFilters}
+                  onToggleFilters={() => setShowFilters(!showFilters)}
+                  activeFilterCount={leftActiveFilterCount}
+                  comparisonResult={comparisonResult}
+                  side="left"
+                  containerClassName={cn(
+                    "h-full max-w-[48vw] mx-auto px-4",
+                    showColumnSelector ? "max-h-[calc(100vh-600px)]" : "max-h-[500px]"
+                  )}
+                />
               </div>
 
               {/* Right Table */}
               <div className="flex flex-col min-h-0">
-                <div className="p-2 border-b border-border bg-muted/30">
-                  <div className="flex items-center justify-between gap-2">
-                    <div className="flex items-center gap-2 flex-wrap">
-                      <Database className="h-4 w-4 text-primary" />
-                      <span className="text-sm font-semibold">
-                        {rightTable.databaseName}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        {rightTable.schemaName}.{rightTable.tableName}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        ({rightColumnsToDisplay.length} columns)
-                      </span>
-                      {rightTableFilters.hasActiveFilters && (
-                        <span className="text-xs text-muted-foreground">
-                          • Showing {rightTableFilters.filteredRowCount} of {rightTableData.rows.length} rows
-                          {rightTableFilters.filteredRowCount !== rightTableData.rows.length && (
-                            <span className="text-primary"> (filtered)</span>
-                          )}
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        onClick={() => setShowFilters(!showFilters)}
-                      >
-                        <Filter className="h-3 w-3" />
-                        {rightTableFilters.hasActiveFilters && (
-                          <Badge className="text-xs">
-                            {rightActiveFilterCount}
-                          </Badge>
-                        )}
-                      </Button>
-                      {rightTableFilters.hasActiveFilters && (
-                        <Button
-                          variant="destructive"
-                          size="sm"
-                          onClick={rightTableFilters.handleClearFilters}
-                        >
-                          <XCircle className="h-3 w-3" />
-                          Clear All
-                        </Button>
-                      )}
-                    </div>
-                  </div>
-                </div>
-                <div className="flex-1 min-h-0">
-                    <Table containerClassName={cn("h-full max-w-[48vw] mx-auto px-4",showColumnSelector ? "max-h-[calc(100vh-600px)]" : "max-h-[500px]")}>
-                      <TableHeader>
-                        <TableRow>
-                          {rightColumnsToDisplay.map((column) => (
-                            <TableHead key={column} className="font-semibold p-2 text-xs">
-                              <div className="flex flex-col gap-1">
-                                <span>{column}</span>
-                                {showFilters && (
-                                  <InputGroup className="h-7">
-                                    <InputGroupInput
-                                      type="text"
-                                      placeholder="Filter..."
-                                      value={rightTableFilters.filters[column] || ""}
-                                      onChange={(e) =>
-                                        rightTableFilters.handleFilterChange(column, e.target.value)
-                                      }
-                                      className="text-xs"
-                                    />
-                                    {rightTableFilters.filters[column] && (
-                                      <InputGroupAddon align="inline-end">
-                                        <InputGroupButton
-                                          variant="ghost"
-                                          size="icon-xs"
-                                          onClick={() => rightTableFilters.handleClearFilter(column)}
-                                          type="button"
-                                          className="text-destructive hover:text-destructive/80"
-                                        >
-                                          <XCircle className="h-3 w-3" />
-                                        </InputGroupButton>
-                                      </InputGroupAddon>
-                                    )}
-                                  </InputGroup>
-                                )}
-                              </div>
-                            </TableHead>
-                          ))}
-                        </TableRow>
-                      </TableHeader>
-                      <TableBody>
-                        {rightTableFilters.filteredRows.length > 0 ? (
-                          rightTableFilters.filteredRows.map((row, rowIndex) => {
-                            const diff = comparisonResult?.get(rowIndex);
-                            const isDifferent =
-                              diff?.status === "different" ||
-                              diff?.status === "right-only";
-
-                            return (
-                              <TableRow
-                                key={rowIndex}
-                                className={
-                                  isDifferent
-                                    ? "bg-destructive/10 hover:bg-destructive/20"
-                                    : ""
-                                }
-                              >
-                                {rightColumnsToDisplay.map((column) => {
-                                  const isDiffColumn =
-                                    diff?.diffColumns?.includes(column);
-                                  return (
-                                    <TableCell
-                                      key={column}
-                                      className={`max-w-xs p-2 text-xs ${
-                                        isDiffColumn
-                                          ? "bg-destructive/20 font-semibold"
-                                          : ""
-                                      }`}
-                                    >
-                                      <TableCellComponent value={row[column]} />
-                                    </TableCell>
-                                  );
-                                })}
-                              </TableRow>
-                            );
-                          })
-                        ) : (
-                          <TableRow>
-                            <TableCell
-                              colSpan={rightColumnsToDisplay.length}
-                              className="text-center py-8 text-muted-foreground text-xs"
-                            >
-                              {rightTableFilters.hasActiveFilters
-                                ? "No rows match the current filters"
-                                : "No data"}
-                            </TableCell>
-                          </TableRow>
-                        )}
-                      </TableBody>
-                    </Table>
-                </div>
+                <ComparisonTable
+                  databaseName={rightTable.databaseName}
+                  schemaName={rightTable.schemaName}
+                  tableName={rightTable.tableName}
+                  columns={rightColumnsToDisplay}
+                  rows={rightTableData.rows}
+                  filters={rightTableFilters}
+                  showFilters={showFilters}
+                  onToggleFilters={() => setShowFilters(!showFilters)}
+                  activeFilterCount={rightActiveFilterCount}
+                  comparisonResult={comparisonResult}
+                  side="right"
+                  containerClassName={cn(
+                    "h-full max-w-[48vw] mx-auto px-4",
+                    showColumnSelector ? "max-h-[calc(100vh-600px)]" : "max-h-[500px]"
+                  )}
+                />
               </div>
             </div>
           </div>

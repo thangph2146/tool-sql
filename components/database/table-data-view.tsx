@@ -19,6 +19,7 @@ import { TABLE_LIMIT_OPTIONS, DEFAULT_TABLE_LIMIT } from "@/lib/constants/table-
 import { TableCell as TableCellComponent } from "@/components/database/table-cell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
+import { InputGroup, InputGroupInput, InputGroupButton, InputGroupAddon } from "@/components/ui/input-group";
 import { Field, FieldContent, FieldLabel } from "@/components/ui/field";
 import {
   Table,
@@ -196,26 +197,28 @@ export function TableDataView({
                       <div className="flex flex-col gap-1">
                         <span>{column}</span>
                         {showFilters && (
-                          <div className="relative">
-                            <Input
+                          <InputGroup className="h-7">
+                            <InputGroupInput
                               type="text"
                               placeholder="Filter..."
                               value={filters[column] || ""}
-                              onChange={(e) =>
-                                handleFilterChange(column, e.target.value)
-                              }
-                              className="h-7 text-xs"
+                              onChange={(e) => handleFilterChange(column, e.target.value)}
+                              className="text-xs"
                             />
                             {filters[column] && (
-                              <button
-                                onClick={() => handleClearFilter(column)}
-                                className="absolute right-1 top-1/2 -translate-y-1/2 text-muted-foreground hover:text-foreground"
-                                type="button"
-                              >
-                                <XCircle className="h-3 w-3" />
-                              </button>
+                              <InputGroupAddon align="inline-end">
+                                <InputGroupButton
+                                  variant="ghost"
+                                  size="icon-xs"
+                                  onClick={() => handleClearFilter(column)}
+                                  type="button"
+                                  className="text-destructive hover:text-destructive/80"
+                                >
+                                  <XCircle className="h-3 w-3" />
+                                </InputGroupButton>
+                              </InputGroupAddon>
                             )}
-                          </div>
+                          </InputGroup>
                         )}
                       </div>
                     </TableHead>
