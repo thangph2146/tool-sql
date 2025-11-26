@@ -666,14 +666,16 @@ export function TableDataView({
               <TableBody>
                 {tableRows.length > 0 ? (
                   tableRows.map((row, rowIndex) => {
-                    // Use a unique key based on row data + filter state to force re-render when filter changes
                     const firstColumn = tableData.columns[0];
+                    const primaryOriginalId =
+                      firstColumn && row[`${firstColumn}_OriginalId`];
+                    const fallbackOriginalId = row["Oid_OriginalId"];
                     const uniqueKey =
-                      row["Oid"] ||
-                      row["Id"] ||
-                      (firstColumn
-                        ? row[`${firstColumn}_OriginalId`] ?? row[firstColumn]
-                        : undefined) ||
+                      primaryOriginalId ??
+                      fallbackOriginalId ??
+                      row["Id"] ??
+                      row["Oid"] ??
+                      (firstColumn ? row[firstColumn] : undefined) ??
                       `${rowIndex}-${debouncedFilterKey}`;
                     return (
                       <TableRow key={String(uniqueKey)}>

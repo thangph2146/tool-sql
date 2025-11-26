@@ -18,6 +18,7 @@ interface UseColumnFilterOptionsParams {
   columnName?: string;
   includeReferences?: boolean;
   limit?: number;
+  search?: string;
 }
 
 export function useColumnFilterOptions(
@@ -28,6 +29,7 @@ export function useColumnFilterOptions(
     columnName,
     includeReferences = true,
     limit = 500,
+    search = "",
   }: UseColumnFilterOptionsParams,
   enabled: boolean
 ) {
@@ -40,18 +42,20 @@ export function useColumnFilterOptions(
       columnName,
       includeReferences,
       limit,
+      search,
     ],
     queryFn: async () => {
       if (!databaseName || !schemaName || !tableName || !columnName) {
         throw new Error("Missing required parameters for column options");
       }
+      const searchParam = search.trim() ? `&search=${encodeURIComponent(search.trim())}` : "";
       const url = `/api/db/column-options?database=${databaseName}&schema=${encodeURIComponent(
         schemaName
       )}&table=${encodeURIComponent(
         tableName
       )}&column=${encodeURIComponent(
         columnName
-      )}&includeReferences=${includeReferences ? "true" : "false"}&limit=${limit}`;
+      )}&includeReferences=${includeReferences ? "true" : "false"}&limit=${limit}${searchParam}`;
       const response = await axiosClient.get<ColumnOptionsResponse>(url);
       return response.data;
     },
@@ -62,6 +66,10 @@ export function useColumnFilterOptions(
       !!schemaName &&
       !!tableName &&
       !!columnName,
+    // Ngăn refetch khi component re-render hoặc window focus
+    refetchOnMount: false,
+    refetchOnWindowFocus: false,
+    refetchOnReconnect: false,
   });
 }
 

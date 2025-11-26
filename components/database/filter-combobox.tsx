@@ -12,8 +12,15 @@ import {
   InputGroupAddon,
   InputGroupButton,
 } from "@/components/ui/input-group";
-import { Select, SelectContent, SelectTrigger } from "@/components/ui/select";
-import { Check, ChevronDown, XCircle } from "lucide-react";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
+import { Button } from "@/components/ui/button";
+import { Check, XCircle, ChevronDown } from "lucide-react";
+import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 
 interface FilterComboboxProps {
   column: string;
@@ -24,6 +31,7 @@ interface FilterComboboxProps {
   onChange: (value: string) => void;
   onClear: () => void;
   onOpenChange?: (open: boolean) => void;
+  onSearchChange?: (search: string) => void;
 }
 
 export function FilterCombobox({
@@ -35,11 +43,28 @@ export function FilterCombobox({
   onChange,
   onClear,
   onOpenChange,
+  onSearchChange,
 }: FilterComboboxProps) {
   const [open, setOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
+  const [pendingValues, setPendingValues] = useState<string[]>([]);
+  
+  const selectedValues = useMemo(() => {
+    if (!value) return [];
+    return value
+      .split("||")
+      .map((val) => val.trim())
+      .filter((val) => val.length > 0);
+  }, [value]);
 
+  // Khi có onSearchChange, không filter client-side nữa, để server filter
+  // Chỉ filter client-side nếu không có onSearchChange (backward compatibility)
   const normalizedOptions = useMemo(() => {
+    if (onSearchChange) {
+      // Server-side filtering, trả về tất cả options từ server
+      return options;
+    }
+    // Client-side filtering (backward compatibility)
     if (!searchTerm.trim()) {
       return options;
     }
@@ -47,12 +72,36 @@ export function FilterCombobox({
     return options.filter((option) =>
       option.toLowerCase().includes(normalizedSearch)
     );
-  }, [options, searchTerm]);
+  }, [options, searchTerm, onSearchChange]);
 
-  const handleSelect = (selectedValue: string) => {
-    onChange(selectedValue);
-    setOpen(false);
+  const toggleValue = (target: string, event?: React.MouseEvent) => {
+    // Prevent default behavior (closing the popover)
+    if (event) {
+      event.preventDefault();
+      event.stopPropagation();
+    }
+    const normalized = target.trim();
+    if (!normalized) return;
+    // Chỉ cập nhật pendingValues, không gọi onChange
+    if (pendingValues.includes(normalized)) {
+      setPendingValues(pendingValues.filter((val) => val !== normalized));
+    } else {
+      setPendingValues([...pendingValues, normalized]);
+    }
     setSearchTerm("");
+  };
+
+  const handleApply = () => {
+    const uniqueValues = Array.from(new Set(pendingValues));
+    onChange(uniqueValues.join("||"));
+    setSearchTerm("");
+    setOpen(false);
+  };
+
+  const handleCancel = () => {
+    setPendingValues(selectedValues);
+    setSearchTerm("");
+    setOpen(false);
   };
 
   const handleClear = () => {
@@ -65,31 +114,62 @@ export function FilterCombobox({
     searchTerm.trim().length > 0 &&
     !options.some(
       (option) => option.toLowerCase() === searchTerm.trim().toLowerCase()
+    ) &&
+    !pendingValues.some(
+      (val) => val.toLowerCase() === searchTerm.trim().toLowerCase()
     );
+
+  const displayValue =
+    selectedValues.length > 0
+      ? selectedValues.length === 1
+        ? selectedValues[0]
+        : `${selectedValues.length} selected`
+      : "";
 
   return (
     <InputGroup className="h-7">
-      <Select
-        open={open}
-        onOpenChange={(nextOpen) => {
-          setOpen(nextOpen);
-          onOpenChange?.(nextOpen);
-        }}
-      >
-        <SelectTrigger className="flex h-7 flex-1 items-center justify-between gap-2 rounded-none border-0 px-2 text-xs shadow-none focus-visible:ring-0">
-          <span
-            className={
-              value ? "text-foreground truncate" : "text-muted-foreground"
-            }
-          >
-            {value || placeholder}
-          </span>
-        </SelectTrigger>
-        <SelectContent className="p-0" align="start" position="popper">
-          <Command className="w-[var(--radix-select-trigger-width)]">
+      <Popover open={open} onOpenChange={(nextOpen: boolean) => {
+        if (nextOpen) {
+          // Khởi tạo pendingValues khi mở popover
+          setPendingValues(selectedValues);
+        } else {
+          // Khi đóng popover mà không áp dụng, reset về giá trị ban đầu
+          setPendingValues(selectedValues);
+          setSearchTerm("");
+        }
+        setOpen(nextOpen);
+        onOpenChange?.(nextOpen);
+      }}>
+        <PopoverTrigger asChild>
+          <div className="flex h-7 flex-1 items-center justify-between gap-2 rounded-none border-0 px-2 text-xs cursor-pointer hover:bg-accent/50">
+            <div className="flex items-center gap-1.5 flex-1 min-w-0">
+              <span
+                className={cn(
+                  "truncate",
+                  displayValue
+                    ? "text-foreground"
+                    : "text-muted-foreground"
+                )}
+              >
+                {displayValue || placeholder}
+              </span>
+              {selectedValues.length > 1 && (
+                <Badge variant="secondary" className="text-xs px-1 py-0 h-4">
+                  {selectedValues.length}
+                </Badge>
+              )}
+            </div>
+            <ChevronDown className="h-3 w-3 opacity-50 shrink-0" />
+          </div>
+        </PopoverTrigger>
+        <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+          <Command>
             <CommandInput
               value={searchTerm}
-              onValueChange={setSearchTerm}
+              onValueChange={(value) => {
+                setSearchTerm(value);
+                onSearchChange?.(value);
+              }}
               placeholder={`Search ${column}...`}
               className="h-8 text-xs"
             />
@@ -100,34 +180,73 @@ export function FilterCombobox({
                   : "No value found. Use the search box to enter custom text."}
               </CommandEmpty>
               <CommandGroup>
-                {normalizedOptions.map((option) => (
-                  <CommandItem
-                    key={option}
-                    value={option}
-                    onSelect={() => handleSelect(option)}
-                    className="text-xs"
-                  >
-                    {option}
-                    {value === option && (
-                      <Check className="ml-auto h-3 w-3 opacity-70" />
-                    )}
-                  </CommandItem>
-                ))}
+                {normalizedOptions.map((option) => {
+                  const isSelected = pendingValues.includes(option);
+                  return (
+                    <CommandItem
+                      key={option}
+                      value={option}
+                      onSelect={() => {
+                        toggleValue(option);
+                      }}
+                      className="text-xs cursor-pointer"
+                    >
+                      <div className="flex items-center gap-2 flex-1 min-w-0">
+                        <div
+                          className={cn(
+                            "flex h-4 w-4 items-center justify-center rounded border shrink-0",
+                            isSelected
+                              ? "bg-primary border-primary text-primary-foreground"
+                              : "border-input"
+                          )}
+                        >
+                          {isSelected && <Check className="h-3 w-3" />}
+                        </div>
+                        <span className="truncate flex-1">{option}</span>
+                      </div>
+                    </CommandItem>
+                  );
+                })}
                 {hasCustomOption && (
                   <CommandItem
                     value={searchTerm.trim()}
-                    onSelect={() => handleSelect(searchTerm.trim())}
-                    className="text-xs italic text-muted-foreground"
+                    onSelect={() => {
+                      toggleValue(searchTerm.trim());
+                    }}
+                    className="text-xs italic text-muted-foreground cursor-pointer"
                   >
-                    Use &ldquo;{searchTerm.trim()}&rdquo;
+                    <div className="flex items-center gap-2">
+                      <div className="flex h-4 w-4 items-center justify-center rounded border border-input shrink-0" />
+                      <span>Use &ldquo;{searchTerm.trim()}&rdquo;</span>
+                    </div>
                   </CommandItem>
                 )}
               </CommandGroup>
             </CommandList>
           </Command>
-        </SelectContent>
-      </Select>
-      {value && (
+          <div className="flex items-center justify-end gap-2 p-2 border-t">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleCancel}
+              className="h-7 text-xs"
+              type="button"
+            >
+              Hủy
+            </Button>
+            <Button
+              variant="default"
+              size="sm"
+              onClick={handleApply}
+              className="h-7 text-xs"
+              type="button"
+            >
+              Áp dụng
+            </Button>
+          </div>
+        </PopoverContent>
+      </Popover>
+      {selectedValues.length > 0 && (
         <InputGroupAddon align="inline-end">
           <InputGroupButton
             variant="ghost"

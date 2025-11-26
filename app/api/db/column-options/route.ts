@@ -17,6 +17,7 @@ export async function GET(request: NextRequest) {
   const tableName = searchParams.get("table");
   const columnName = searchParams.get("column");
   const includeReferences = searchParams.get("includeReferences") === "true";
+  const search = searchParams.get("search") || "";
   const limit = Math.min(
     Math.max(parseInt(searchParams.get("limit") || "500", 10), 1),
     2000
@@ -41,6 +42,7 @@ export async function GET(request: NextRequest) {
     column: columnName,
     includeReferences,
     limit,
+    search,
   });
   const flowLog = logger.createFlowLogger(flowId);
 
@@ -75,15 +77,25 @@ export async function GET(request: NextRequest) {
             .relationships ?? [])
         : [];
 
-    const values = collectColumnUniqueValues({
+    let values = collectColumnUniqueValues({
       rows: tableData.rows,
       columnName,
       includeReferences,
       relationships,
     });
 
+    // Filter values based on search term if provided
+    if (search.trim()) {
+      const searchLower = search.toLowerCase().trim();
+      values = values.filter((value) =>
+        value.toLowerCase().includes(searchLower)
+      );
+    }
+
     flowLog.success("Column options retrieved", {
       optionCount: values.length,
+      searchTerm: search || null,
+      filtered: !!search.trim(),
     });
     flowLog.end(true);
 

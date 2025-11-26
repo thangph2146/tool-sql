@@ -299,13 +299,17 @@ export function ComparisonTable({
             </TableRow>
           </TableHeader>
           <TableBody>
-              {rows.length > 0 ? (
+            {rows.length > 0 ? (
               rows.map((row, rowIndex) => {
                 const firstColumn = columns[0];
+                const primaryOriginalId =
+                  firstColumn && row[`${firstColumn}_OriginalId`];
+                const fallbackOriginalId = row["Oid_OriginalId"];
                 const uniqueKey =
-                  row["Oid"] ??
+                  primaryOriginalId ??
+                  fallbackOriginalId ??
                   row["Id"] ??
-                  (firstColumn ? row[`${firstColumn}_OriginalId`] : undefined) ??
+                  row["Oid"] ??
                   (firstColumn ? row[firstColumn] : undefined) ??
                   `${rowIndex}-${debouncedFilterKey}`;
                 const diff = comparisonResult?.get(rowIndex);

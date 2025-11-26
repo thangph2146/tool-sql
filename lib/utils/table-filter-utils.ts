@@ -43,10 +43,20 @@ export function filterTableRows<T extends Record<string, unknown>>(
   const { includeReferences = false, relationships = [] } = options;
 
   return rows.filter((row) => {
-    return activeFilters.every(([column, filterValue]) => {
-      const cellValue = row[column];
-      const filterNormalized = normalizeVietnameseText(filterValue);
-      const filterValueLower = filterValue.toLowerCase().trim();
+    return activeFilters.every(([column, rawFilterValue]) => {
+      const filterValues = rawFilterValue
+        .split("||")
+        .map((val) => val.trim())
+        .filter((val) => val.length > 0);
+
+      if (filterValues.length === 0) {
+        return true;
+      }
+
+      const matchesSingleValue = (filterValue: string): boolean => {
+        const cellValue = row[column];
+        const filterNormalized = normalizeVietnameseText(filterValue);
+        const filterValueLower = filterValue.toLowerCase().trim();
 
       if (cellValue === null || cellValue === undefined) {
         return (
@@ -56,89 +66,138 @@ export function filterTableRows<T extends Record<string, unknown>>(
         );
       }
 
-      const cellStr = String(cellValue);
-      const hasRelationship =
-        includeReferences &&
-        relationships.some(
-          (rel) => normalizeColumnName(rel.FK_COLUMN) === normalizeColumnName(column)
-        );
+        const cellStr = String(cellValue);
+        const hasRelationship =
+          includeReferences &&
+          relationships.some(
+            (rel) => normalizeColumnName(rel.FK_COLUMN) === normalizeColumnName(column)
+          );
 
-      const parts = cellStr.split(/\r?\n/);
-      const displayValue = parts[0] || cellStr;
-      const displayValueNormalized = normalizeVietnameseText(displayValue);
-      const displayValueTrimmed = displayValue.trim();
+        const parts = cellStr.split(/\r?\n/);
+        const displayValue = parts[0] || cellStr;
+        const displayValueNormalized = normalizeVietnameseText(displayValue);
+        const displayValueTrimmed = displayValue.trim();
 
-      const originalIdColumn = `${column}_OriginalId`;
-      const originalIdValue = row[originalIdColumn];
+        const originalIdColumn = `${column}_OriginalId`;
+        const originalIdValue = row[originalIdColumn];
 
-      const filterValueTrimmed = filterValue.trim();
-      let exactMatch = false;
+        const filterValueTrimmed = filterValue.trim();
+        let exactMatch = false;
 
-      if (cellStr.trim() === filterValueTrimmed) {
-        exactMatch = true;
-      }
-
-      if (displayValueTrimmed === filterValueTrimmed) {
-        exactMatch = true;
-      }
-
-      if (originalIdValue !== null && originalIdValue !== undefined) {
-        const originalIdStr = String(originalIdValue).trim();
-        if (originalIdStr === filterValueTrimmed) {
+        // Exact match với cell value (bao gồm newline)
+        if (cellStr.trim() === filterValueTrimmed) {
           exactMatch = true;
         }
-      }
 
-      const comboboxFormatMatch = filterValueTrimmed.match(
-        /^(.+?)\s*\(ID:\s*(.+?)\)$/
-      );
-      if (comboboxFormatMatch) {
-        const [, filterDisplay, filterId] = comboboxFormatMatch;
-        const filterDisplayTrimmed = filterDisplay.trim();
-        const filterIdTrimmed = filterId.trim();
+        // Exact match với display value (phần trước newline)
+        // Khi filter chỉ có tên (không có ID), match với tất cả rows có cùng display value
+        if (displayValueTrimmed === filterValueTrimmed) {
+          exactMatch = true;
+        }
 
+        // Exact match với OriginalId
         if (originalIdValue !== null && originalIdValue !== undefined) {
           const originalIdStr = String(originalIdValue).trim();
-          if (
-            displayValueTrimmed === filterDisplayTrimmed &&
-            originalIdStr === filterIdTrimmed
-          ) {
+          if (originalIdStr === filterValueTrimmed) {
             exactMatch = true;
           }
         }
-      }
 
-      const cellWithoutNewlines = cellStr.replace(/\r?\n/g, " ").trim();
-      if (cellWithoutNewlines === filterValueTrimmed) {
-        exactMatch = true;
-      }
+        // Match với format "Display (ID: xxx)" - xử lý cả trường hợp có và không có newline trong filter
+        const comboboxFormatMatch = filterValueTrimmed.match(
+          /^(.+?)\s*\(ID:\s*(.+?)\)$/
+        );
+        if (comboboxFormatMatch) {
+          const [, filterDisplay, filterId] = comboboxFormatMatch;
+          const filterDisplayTrimmed = filterDisplay.trim();
+          const filterIdTrimmed = filterId.trim();
 
-      if (exactMatch) {
-        return true;
-      }
+          if (originalIdValue !== null && originalIdValue !== undefined) {
+            const originalIdStr = String(originalIdValue).trim();
+            // Match display value và ID (exact) - chỉ match với row có đúng ID
+            if (
+              displayValueTrimmed === filterDisplayTrimmed &&
+              originalIdStr === filterIdTrimmed
+            ) {
+              exactMatch = true;
+            }
+            // Match với cell value sau khi normalize newline
+            const cellNormalized = cellStr.replace(/\r?\n/g, " ").trim();
+            const filterNormalized = `${filterDisplayTrimmed} (ID: ${filterIdTrimmed})`;
+            if (cellNormalized === filterNormalized) {
+              exactMatch = true;
+            }
+          }
+        } else {
+          // Khi filter KHÔNG có format "Display (ID: xxx)" (chỉ có tên hoặc chỉ có ID)
+          // Nếu filter chỉ có tên và match với display value, đã được xử lý ở trên (line 93-95)
+          // Nếu filter có newline nhưng không có format ID, normalize và so sánh
+          const filterWithoutNewlines = filterValueTrimmed.replace(/\r?\n/g, " ").trim();
+          if (displayValueTrimmed === filterWithoutNewlines) {
+            exactMatch = true;
+          }
+        }
 
-      if (hasRelationship && originalIdValue !== null && originalIdValue !== undefined) {
-        const originalIdStr = String(originalIdValue).trim();
-        const originalIdLower = originalIdStr.toLowerCase();
-        const originalIdNormalized = normalizeVietnameseText(originalIdStr);
+        // Match cell value sau khi thay newline bằng space
+        const cellWithoutNewlines = cellStr.replace(/\r?\n/g, " ").trim();
+        if (cellWithoutNewlines === filterValueTrimmed) {
+          exactMatch = true;
+        }
 
-        const displayMatches =
-          displayValueNormalized.includes(filterNormalized) ||
-          displayValueTrimmed.toLowerCase().includes(filterValueLower);
+        // Match filter value sau khi thay newline bằng space với cell value
+        const filterWithoutNewlines = filterValueTrimmed.replace(/\r?\n/g, " ").trim();
+        if (cellWithoutNewlines === filterWithoutNewlines) {
+          exactMatch = true;
+        }
 
-        const idMatches =
-          originalIdStr === filterValue.trim() ||
-          originalIdLower.includes(filterValueLower) ||
-          originalIdNormalized.includes(filterNormalized);
+        // Match filter value sau khi thay newline bằng space với cell value (exact)
+        if (cellStr.replace(/\r?\n/g, " ").trim() === filterWithoutNewlines) {
+          exactMatch = true;
+        }
 
-        return displayMatches || idMatches;
-      }
+        if (exactMatch) {
+          return true;
+        }
 
-      const cellNormalized = normalizeVietnameseText(cellStr);
-      return (
-        cellNormalized.includes(filterNormalized) ||
-        cellStr.toLowerCase().includes(filterValueLower)
-      );
+        if (hasRelationship && originalIdValue !== null && originalIdValue !== undefined) {
+          const originalIdStr = String(originalIdValue).trim();
+          const originalIdLower = originalIdStr.toLowerCase();
+          const originalIdNormalized = normalizeVietnameseText(originalIdStr);
+
+          // Match với display value (có thể có newline trong filter)
+          const filterDisplayOnly = filterValueTrimmed.split(/\r?\n/)[0]?.trim() || filterValueTrimmed;
+          const filterDisplayNormalized = normalizeVietnameseText(filterDisplayOnly);
+          const filterDisplayLower = filterDisplayOnly.toLowerCase();
+
+          const displayMatches =
+            displayValueNormalized.includes(filterDisplayNormalized) ||
+            displayValueTrimmed.toLowerCase().includes(filterDisplayLower) ||
+            displayValueNormalized.includes(filterNormalized) ||
+            displayValueTrimmed.toLowerCase().includes(filterValueLower);
+
+          const idMatches =
+            originalIdStr === filterValue.trim() ||
+            originalIdLower.includes(filterValueLower) ||
+            originalIdNormalized.includes(filterNormalized);
+
+          return displayMatches || idMatches;
+        }
+
+        // Match partial với cell value (có thể có newline trong filter)
+        const filterDisplayOnly = filterValueTrimmed.split(/\r?\n/)[0]?.trim() || filterValueTrimmed;
+        const filterDisplayNormalized = normalizeVietnameseText(filterDisplayOnly);
+        const filterDisplayLower = filterDisplayOnly.toLowerCase();
+
+        const cellNormalized = normalizeVietnameseText(cellStr);
+        return (
+          cellNormalized.includes(filterDisplayNormalized) ||
+          cellStr.toLowerCase().includes(filterDisplayLower) ||
+          cellNormalized.includes(filterNormalized) ||
+          cellStr.toLowerCase().includes(filterValueLower)
+        );
+      };
+
+      return filterValues.some(matchesSingleValue);
     });
   });
 }
