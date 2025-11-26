@@ -9,6 +9,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import type { DatabaseName } from "@/lib/db-config";
 import { getDatabaseConfig } from "@/lib/db-config";
+import { logger } from "@/lib/logger";
 import { TableDataView } from "./table-data-view";
 import {
   Dialog,
@@ -62,12 +63,16 @@ export function DatabaseTablesList({
     if (!filterText.trim()) return tables;
 
     const searchText = filterText.toLowerCase().trim();
-    return tables.filter(
+    const filtered = tables.filter(
       (table) =>
         table.TABLE_NAME.toLowerCase().includes(searchText) ||
         table.TABLE_SCHEMA.toLowerCase().includes(searchText)
     );
-  }, [tables, filterText]);
+    
+    
+    return filtered;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [tables, filterText, databaseName]);
 
   // Memoize table count
   const tableCount = useMemo(() => tables?.length || 0, [tables]);
@@ -83,6 +88,11 @@ export function DatabaseTablesList({
   }, [dbConfig, databaseName]);
 
   const handleTableClick = (schema: string, table: string) => {
+    logger.info('Table selected for viewing', {
+      database: databaseName,
+      schema,
+      table,
+    }, 'TABLE_LIST');
     setSelectedTable({ schema, table });
   };
 
@@ -146,7 +156,10 @@ export function DatabaseTablesList({
                 type="text"
                 placeholder="Filter tables by name or schema..."
                 value={filterText}
-                onChange={(e) => setFilterText(e.target.value)}
+                onChange={(e) => {
+                  const newValue = e.target.value;
+                  setFilterText(newValue);
+                }}
                 className="pl-8 pr-8 h-8 text-xs"
               />
               {filterText && (
@@ -224,6 +237,11 @@ export function DatabaseTablesList({
                         size="icon-sm"
                         onClick={(e) => {
                           e.stopPropagation();
+                          logger.info('Table selected for comparison', {
+                            database: databaseName,
+                            schema: table.TABLE_SCHEMA,
+                            table: table.TABLE_NAME,
+                          }, 'TABLE_LIST');
                           onCompareTable({
                             databaseName,
                             schema: table.TABLE_SCHEMA,

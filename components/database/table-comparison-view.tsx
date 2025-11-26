@@ -1,15 +1,15 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useRef } from "react";
 import {
   Loader2,
   Database,
   GitCompare,
-  Settings2,
+  Link2,
 } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import type { DatabaseName } from "@/lib/db-config";
-import { useTableData } from "@/lib/hooks/use-database-query";
+import { useTableData, useTableRelationships } from "@/lib/hooks/use-database-query";
 import { useTableFilters } from "@/lib/hooks/use-table-filters";
 import { useTableComparison } from "@/lib/hooks/use-table-comparison";
 import {
@@ -18,13 +18,16 @@ import {
   DialogHeader,
   DialogTitle,
   DialogDescription,
+  DialogTrigger,
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
+import { Field, FieldContent, FieldLabel } from "@/components/ui/field";
 import { ScrollArea } from "@radix-ui/react-scroll-area";
 import { cn } from "@/lib/utils";
 import { ComparisonTable } from "@/components/database/comparison-table";
-import { TABLE_COMPARISON_LIMIT_OPTIONS, DEFAULT_TABLE_LIMIT } from "@/lib/constants/table-constants";
-import { categorizeColumns, getColumnsToDisplay } from "@/lib/utils/table-column-utils";
+import { DEFAULT_TABLE_LIMIT } from "@/lib/constants/table-constants";
+import { categorizeColumns, getColumnsToDisplay, normalizeColumnName } from "@/lib/utils/table-column-utils";
+import { logger } from "@/lib/logger";
 
 interface TableComparisonViewProps {
   leftTable: {
@@ -49,11 +52,140 @@ export function TableComparisonView({
   open = true,
   asDialog = false,
 }: TableComparisonViewProps) {
-  const [limit, setLimit] = useState(DEFAULT_TABLE_LIMIT);
-  const [page, setPage] = useState(0);
-  const [showColumnSelector, setShowColumnSelector] = useState(false);
+  const [limit] = useState(DEFAULT_TABLE_LIMIT);
+  const [page] = useState(0);
+  const [showColumnSelector] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
+  const [includeReferences, setIncludeReferences] = useState(true);
+  const [showLeftOnlyRelationshipsDialog, setShowLeftOnlyRelationshipsDialog] = useState(false);
+  const [showRightOnlyRelationshipsDialog, setShowRightOnlyRelationshipsDialog] = useState(false);
   const offset = page * limit;
+
+  // Flow logging for TableComparisonView
+  const flowLogRef = useRef<ReturnType<typeof logger.createFlowLogger> | null>(null);
+  const currentComparisonKey = useRef<string>('');
+
+  // Initialize flow when component mounts or opens
+  useEffect(() => {
+    if (!open) return;
+
+    const comparisonKey = `${leftTable.databaseName}_${leftTable.schemaName}_${leftTable.tableName}_VS_${rightTable.databaseName}_${rightTable.schemaName}_${rightTable.tableName}`;
+
+    // End previous flow if comparison changed
+    if (currentComparisonKey.current && currentComparisonKey.current !== comparisonKey && flowLogRef.current) {
+      flowLogRef.current.end(true, {
+        leftTable: `${leftTable.schemaName}.${leftTable.tableName}`,
+        rightTable: `${rightTable.schemaName}.${rightTable.tableName}`,
+        reason: 'Comparison changed',
+      });
+      flowLogRef.current = null;
+    }
+
+    // Create new flow if not exists or comparison changed
+    if (!flowLogRef.current || currentComparisonKey.current !== comparisonKey) {
+      const flowName = `TABLE_COMPARISON_${leftTable.databaseName.toUpperCase()}_${leftTable.schemaName}_${leftTable.tableName}_VS_${rightTable.databaseName.toUpperCase()}_${rightTable.schemaName}_${rightTable.tableName}`;
+      const flowId = logger.startFlow(flowName, {
+        leftTable: {
+          database: leftTable.databaseName,
+          schema: leftTable.schemaName,
+          table: leftTable.tableName,
+        },
+        rightTable: {
+          database: rightTable.databaseName,
+          schema: rightTable.schemaName,
+          table: rightTable.tableName,
+        },
+        includeReferences,
+        limit,
+        page,
+      });
+      flowLogRef.current = logger.createFlowLogger(flowId);
+      currentComparisonKey.current = comparisonKey;
+
+      flowLogRef.current.info('TableComparisonView opened', {
+        leftTable: `${leftTable.schemaName}.${leftTable.tableName} (${leftTable.databaseName})`,
+        rightTable: `${rightTable.schemaName}.${rightTable.tableName} (${rightTable.databaseName})`,
+      });
+    }
+
+    // Cleanup: end flow when component unmounts or comparison changes
+    // Note: In React Strict Mode (development), cleanup runs twice, but we check currentComparisonKey
+    // to ensure we only end flow when comparison actually changes or component really unmounts
+    return () => {
+      // Only end flow if this is still the current comparison
+      // In Strict Mode, if component remounts immediately, currentComparisonKey will be set again
+      // so this check will fail and flow won't be ended prematurely
+      if (flowLogRef.current && currentComparisonKey.current === comparisonKey) {
+        // Use a flag to prevent ending flow if component remounts (Strict Mode)
+        const shouldEndFlow = currentComparisonKey.current === comparisonKey;
+
+        if (shouldEndFlow) {
+          flowLogRef.current.end(true, {
+            leftTable: `${leftTable.schemaName}.${leftTable.tableName}`,
+            rightTable: `${rightTable.schemaName}.${rightTable.tableName}`,
+            reason: 'Component unmounted or comparison changed',
+          });
+          flowLogRef.current = null;
+          // Only clear currentComparisonKey if it's still the same (real unmount)
+          if (currentComparisonKey.current === comparisonKey) {
+            currentComparisonKey.current = '';
+          }
+        }
+      }
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, leftTable.databaseName, leftTable.schemaName, leftTable.tableName, rightTable.databaseName, rightTable.schemaName, rightTable.tableName]); // Only recreate flow when comparison changes, not when includeReferences/limit/page change
+
+  // Fetch relationships for both tables
+  const leftRelationshipsData = useTableRelationships(
+    leftTable.databaseName,
+    leftTable.schemaName,
+    leftTable.tableName,
+    true
+  );
+
+  const rightRelationshipsData = useTableRelationships(
+    rightTable.databaseName,
+    rightTable.schemaName,
+    rightTable.tableName,
+    true
+  );
+
+  const leftRelationships = useMemo(() => {
+    return (
+      (leftRelationshipsData?.data as {
+        relationships?: Array<{
+          FK_NAME: string;
+          FK_SCHEMA: string;
+          FK_TABLE: string;
+          FK_COLUMN: string;
+          PK_SCHEMA: string;
+          PK_TABLE: string;
+          PK_COLUMN: string;
+        }>;
+      })?.relationships || []
+    );
+  }, [leftRelationshipsData?.data]);
+
+  const rightRelationships = useMemo(() => {
+    return (
+      (rightRelationshipsData?.data as {
+        relationships?: Array<{
+          FK_NAME: string;
+          FK_SCHEMA: string;
+          FK_TABLE: string;
+          FK_COLUMN: string;
+          PK_SCHEMA: string;
+          PK_TABLE: string;
+          PK_COLUMN: string;
+        }>;
+      })?.relationships || []
+    );
+  }, [rightRelationshipsData?.data]);
+
+  // Filter state hooks (debounced values used to request filtered data)
+  const leftTableFilters = useTableFilters();
+  const rightTableFilters = useTableFilters();
 
   // Fetch data for both tables
   const leftData = useTableData(
@@ -62,7 +194,9 @@ export function TableComparisonView({
     leftTable.tableName,
     limit,
     offset,
-    true
+    true,
+    includeReferences,
+    leftTableFilters.debouncedFilters
   );
 
   const rightData = useTableData(
@@ -71,11 +205,44 @@ export function TableComparisonView({
     rightTable.tableName,
     limit,
     offset,
-    true
+    true,
+    includeReferences,
+    rightTableFilters.debouncedFilters
   );
 
   const leftTableData = leftData.data?.data;
   const rightTableData = rightData.data?.data;
+
+  // Log when table data is loaded
+  useEffect(() => {
+    if (leftTableData && rightTableData && flowLogRef.current) {
+      flowLogRef.current.success('Comparison data loaded', {
+        leftTable: {
+          rowsLoaded: leftTableData.rows.length,
+          totalRows: leftTableData.totalRows,
+          columns: leftTableData.columns.length,
+        },
+        rightTable: {
+          rowsLoaded: rightTableData.rows.length,
+          totalRows: rightTableData.totalRows,
+          columns: rightTableData.columns.length,
+        },
+        offset,
+        limit,
+        includeReferences,
+      });
+    }
+  }, [leftTableData, rightTableData, offset, limit, includeReferences]);
+
+  // Log errors
+  useEffect(() => {
+    if (leftData.error && flowLogRef.current) {
+      flowLogRef.current.error('Error loading left table data', leftData.error);
+    }
+    if (rightData.error && flowLogRef.current) {
+      flowLogRef.current.error('Error loading right table data', rightData.error);
+    }
+  }, [leftData.error, rightData.error]);
 
   // Get all unique columns from both tables
   const allColumns = useMemo(() => {
@@ -129,20 +296,10 @@ export function TableComparisonView({
     return getColumnsToDisplay(rightTableData.columns, selectedColumns);
   }, [selectedColumns, rightTableData?.columns]);
 
-  // Use filters hook for left table
-  const leftTableFilters = useTableFilters({
-    rows: leftTableData?.rows || [],
-  });
-
-  // Use filters hook for right table
-  const rightTableFilters = useTableFilters({
-    rows: rightTableData?.rows || [],
-  });
-
   // Compare rows using optimized hook
   const comparisonResult = useTableComparison({
-    leftRows: leftTableFilters.filteredRows,
-    rightRows: rightTableFilters.filteredRows,
+    leftRows: leftTableData?.rows || [],
+    rightRows: rightTableData?.rows || [],
     columnsToCompare,
   });
 
@@ -151,14 +308,8 @@ export function TableComparisonView({
   const hasError = useMemo(() => leftData.error || rightData.error, [leftData.error, rightData.error]);
   
   // Memoize active filter counts
-  const leftActiveFilterCount = useMemo(
-    () => Object.values(leftTableFilters.filters).filter((v) => v.trim() !== "").length,
-    [leftTableFilters.filters]
-  );
-  const rightActiveFilterCount = useMemo(
-    () => Object.values(rightTableFilters.filters).filter((v) => v.trim() !== "").length,
-    [rightTableFilters.filters]
-  );
+  const leftActiveFilterCount = leftTableFilters.activeFilterCount;
+  const rightActiveFilterCount = rightTableFilters.activeFilterCount;
   
   // Memoize difference count
   const differenceCount = useMemo(
@@ -166,10 +317,28 @@ export function TableComparisonView({
     [comparisonResult]
   );
 
+  // Filter relationships for leftOnly columns
+  const leftOnlyRelationships = useMemo(() => {
+    if (columnCategories.leftOnly.length === 0) return [];
+    const leftOnlyNormalized = new Set(columnCategories.leftOnly.map(normalizeColumnName));
+    return leftRelationships.filter(rel => 
+      leftOnlyNormalized.has(normalizeColumnName(rel.FK_COLUMN))
+    );
+  }, [leftRelationships, columnCategories.leftOnly]);
+
+  // Filter relationships for rightOnly columns
+  const rightOnlyRelationships = useMemo(() => {
+    if (columnCategories.rightOnly.length === 0) return [];
+    const rightOnlyNormalized = new Set(columnCategories.rightOnly.map(normalizeColumnName));
+    return rightRelationships.filter(rel => 
+      rightOnlyNormalized.has(normalizeColumnName(rel.FK_COLUMN))
+    );
+  }, [rightRelationships, columnCategories.rightOnly]);
+
   const content = (
     <div className="w-full h-full flex flex-col">
       {/* Header */}
-      <div className="flex items-center justify-between border-b border-border">
+      <div className="flex items-center justify-between border-b border-border p-4">
         <div className="flex items-center gap-2">
           <GitCompare className="h-5 w-5 text-primary" />
           <div>
@@ -181,6 +350,21 @@ export function TableComparisonView({
               {rightTable.schemaName}.{rightTable.tableName}
             </p>
           </div>
+        </div>
+        <div className="flex items-center gap-2">
+          <Field orientation="horizontal" className="gap-2 items-center">
+            <FieldLabel className="text-xs cursor-pointer" onClick={() => setIncludeReferences(!includeReferences)}>
+              Show References
+            </FieldLabel>
+            <FieldContent>
+              <input
+                type="checkbox"
+                checked={includeReferences}
+                onChange={(e) => setIncludeReferences(e.target.checked)}
+                className="h-4 w-4 rounded border-input"
+              />
+            </FieldContent>
+          </Field>
         </div>
       </div>
 
@@ -229,35 +413,13 @@ export function TableComparisonView({
                   <span className="text-muted-foreground">
                     Comparing: {columnsToCompare.length} of {allColumns.length} columns
                   </span>
+                  {(leftRelationships.length > 0 || rightRelationships.length > 0) && (
+                    <span className="text-muted-foreground">
+                      • {leftRelationships.length + rightRelationships.length} relationship{(leftRelationships.length + rightRelationships.length) > 1 ? 's' : ''}
+                    </span>
+                  )}
                 </div>
-                <div className="flex items-center gap-2 flex-wrap">
-                  <Button
-                    variant="outline"
-                    size="sm"
-                    onClick={() => setShowColumnSelector(!showColumnSelector)}
-                    className="gap-2 text-xs"
-                  >
-                    <Settings2 className="h-3 w-3" />
-                    Select Columns
-                  </Button>
-                  <span className="text-xs text-muted-foreground">
-                    Limit:
-                  </span>
-                  <select
-                    value={limit}
-                    onChange={(e) => {
-                      setLimit(parseInt(e.target.value, 10));
-                      setPage(0);
-                    }}
-                    className="h-7 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
-                    {TABLE_COMPARISON_LIMIT_OPTIONS.map((opt) => (
-                      <option key={opt} value={opt}>
-                        {opt}
-                      </option>
-                    ))}
-                  </select>
-                </div>
+                
               </div>
               
               {/* Column Selector */}
@@ -341,6 +503,63 @@ export function TableComparisonView({
                           <span className="text-xs text-muted-foreground">
                             - {leftTable.databaseName}
                           </span>
+                          {leftOnlyRelationships.length > 0 && (
+                            <Dialog open={showLeftOnlyRelationshipsDialog} onOpenChange={setShowLeftOnlyRelationshipsDialog}>
+                              <DialogTrigger asChild>
+                                <Button variant="ghost" size="sm" className="gap-1 text-xs h-5 px-2">
+                                  <Link2 className="h-3 w-3" />
+                                  <span>Relationships</span>
+                                  <Badge variant="secondary" className="ml-1 text-xs">
+                                    {leftOnlyRelationships.length}
+                                  </Badge>
+                                </Button>
+                              </DialogTrigger>
+                              <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+                                <DialogHeader>
+                                  <DialogTitle>Table Relationships - Left Table Only Columns</DialogTitle>
+                                  <DialogDescription>
+                                    Foreign key relationships for columns that only exist in {leftTable.databaseName}
+                                  </DialogDescription>
+                                </DialogHeader>
+                                <ScrollArea className="max-h-[60vh] overflow-y-auto">
+                                  <div className="space-y-3">
+                                    {leftOnlyRelationships.map((rel, index) => (
+                                      <div
+                                        key={index}
+                                        className="p-3 border border-border rounded-lg bg-muted/30"
+                                      >
+                                        <div className="flex items-start gap-3">
+                                          <Link2 className="h-4 w-4 text-primary mt-0.5" />
+                                          <div className="flex-1 space-y-1.5">
+                                            <div className="flex items-center gap-2">
+                                              <span className="font-semibold text-xs">{rel.FK_NAME}</span>
+                                              <Badge variant="outline" className="text-xs text-blue-600 dark:text-blue-400 border-blue-500/50">
+                                                {rel.FK_COLUMN}
+                                              </Badge>
+                                            </div>
+                                            <div className="text-xs space-y-1">
+                                              <div className="flex items-center gap-2">
+                                                <span className="text-muted-foreground">From:</span>
+                                                <Badge variant="outline" className="text-xs">
+                                                  {rel.FK_SCHEMA}.{rel.FK_TABLE}.{rel.FK_COLUMN}
+                                                </Badge>
+                                              </div>
+                                              <div className="flex items-center gap-2">
+                                                <span className="text-muted-foreground">To:</span>
+                                                <Badge variant="outline" className="text-xs">
+                                                  {rel.PK_SCHEMA}.{rel.PK_TABLE}.{rel.PK_COLUMN}
+                                                </Badge>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </ScrollArea>
+                              </DialogContent>
+                            </Dialog>
+                          )}
                         </div>
                         <ScrollArea className="max-h-[200px] overflow-y-auto">
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 ml-6">
@@ -390,6 +609,63 @@ export function TableComparisonView({
                           <span className="text-xs text-muted-foreground">
                             - {rightTable.databaseName}
                           </span>
+                          {rightOnlyRelationships.length > 0 && (
+                            <Dialog open={showRightOnlyRelationshipsDialog} onOpenChange={setShowRightOnlyRelationshipsDialog}>
+                              <DialogTrigger asChild>
+                                <Button variant="ghost" size="sm" className="gap-1 text-xs h-5 px-2">
+                                  <Link2 className="h-3 w-3" />
+                                  <span>Relationships</span>
+                                  <Badge variant="secondary" className="ml-1 text-xs">
+                                    {rightOnlyRelationships.length}
+                                  </Badge>
+                                </Button>
+                              </DialogTrigger>
+                              <DialogContent className="max-w-4xl max-h-[80vh] overflow-y-auto">
+                                <DialogHeader>
+                                  <DialogTitle>Table Relationships - Right Table Only Columns</DialogTitle>
+                                  <DialogDescription>
+                                    Foreign key relationships for columns that only exist in {rightTable.databaseName}
+                                  </DialogDescription>
+                                </DialogHeader>
+                                <ScrollArea className="max-h-[60vh] overflow-y-auto">
+                                  <div className="space-y-3">
+                                    {rightOnlyRelationships.map((rel, index) => (
+                                      <div
+                                        key={index}
+                                        className="p-3 border border-border rounded-lg bg-muted/30"
+                                      >
+                                        <div className="flex items-start gap-3">
+                                          <Link2 className="h-4 w-4 text-primary mt-0.5" />
+                                          <div className="flex-1 space-y-1.5">
+                                            <div className="flex items-center gap-2">
+                                              <span className="font-semibold text-xs">{rel.FK_NAME}</span>
+                                              <Badge variant="outline" className="text-xs text-green-600 dark:text-green-400 border-green-500/50">
+                                                {rel.FK_COLUMN}
+                                              </Badge>
+                                            </div>
+                                            <div className="text-xs space-y-1">
+                                              <div className="flex items-center gap-2">
+                                                <span className="text-muted-foreground">From:</span>
+                                                <Badge variant="outline" className="text-xs">
+                                                  {rel.FK_SCHEMA}.{rel.FK_TABLE}.{rel.FK_COLUMN}
+                                                </Badge>
+                                              </div>
+                                              <div className="flex items-center gap-2">
+                                                <span className="text-muted-foreground">To:</span>
+                                                <Badge variant="outline" className="text-xs">
+                                                  {rel.PK_SCHEMA}.{rel.PK_TABLE}.{rel.PK_COLUMN}
+                                                </Badge>
+                                              </div>
+                                            </div>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    ))}
+                                  </div>
+                                </ScrollArea>
+                              </DialogContent>
+                            </Dialog>
+                          )}
                         </div>
                         <ScrollArea className="max-h-[200px] overflow-y-auto">
                         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-2 ml-6">
@@ -448,6 +724,10 @@ export function TableComparisonView({
                   activeFilterCount={leftActiveFilterCount}
                   comparisonResult={comparisonResult}
                   side="left"
+                  relationships={leftRelationships}
+                  includeReferences={includeReferences}
+                  totalRows={leftTableData.totalRows}
+                  filteredRowCount={leftTableData.filteredRowCount}
                   containerClassName={cn(
                     "h-full max-w-[48vw] mx-auto px-4",
                     showColumnSelector ? "max-h-[calc(100vh-600px)]" : "max-h-[500px]"
@@ -469,6 +749,10 @@ export function TableComparisonView({
                   activeFilterCount={rightActiveFilterCount}
                   comparisonResult={comparisonResult}
                   side="right"
+                  relationships={rightRelationships}
+                  includeReferences={includeReferences}
+                  totalRows={rightTableData.totalRows}
+                  filteredRowCount={rightTableData.filteredRowCount}
                   containerClassName={cn(
                     "h-full max-w-[48vw] mx-auto px-4",
                     showColumnSelector ? "max-h-[calc(100vh-600px)]" : "max-h-[500px]"

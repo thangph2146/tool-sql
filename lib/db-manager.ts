@@ -408,32 +408,50 @@ export async function executeProcedure<T = sql.IResult<unknown>>(
 /**
  * Test connection to a specific database
  */
-export async function testConnection(databaseName: DatabaseName): Promise<boolean> {
+export async function testConnection(databaseName: DatabaseName, flowId?: string): Promise<boolean> {
+  const flowLog = flowId ? logger.createFlowLogger(flowId) : null;
+  
   try {
-    logger.info(`Testing connection to database: ${databaseName}...`, {
+    const logData = {
       server: databases[databaseName].config.server,
       database: databases[databaseName].config.database,
-    }, 'DB_TEST');
+    };
+    
+    if (flowLog) {
+      flowLog.info(`Testing connection to database: ${databaseName}`, logData);
+    } else {
+      logger.info(`Testing connection to database: ${databaseName}...`, logData, 'DB_TEST');
+    }
+    
     const result = await query(databaseName, 'SELECT 1 as test');
     const isConnected = result.recordset.length > 0;
+    
     if (isConnected) {
-      logger.success(`Connection test successful for database: ${databaseName}`, {
-        server: databases[databaseName].config.server,
-        database: databases[databaseName].config.database,
-      }, 'DB_TEST');
+      if (flowLog) {
+        flowLog.success(`Connection test successful`);
+      } else {
+        logger.success(`Connection test successful for database: ${databaseName}`, logData, 'DB_TEST');
+      }
     } else {
-      logger.warn(`Connection test returned no results for database: ${databaseName}`, {
-        server: databases[databaseName].config.server,
-        database: databases[databaseName].config.database,
-      }, 'DB_TEST');
+      if (flowLog) {
+        flowLog.warn(`Connection test returned no results`);
+      } else {
+        logger.warn(`Connection test returned no results for database: ${databaseName}`, logData, 'DB_TEST');
+      }
     }
     return isConnected;
   } catch (error) {
-    logger.error(`Connection test error for database: ${databaseName}`, {
+    const logData = {
       error,
       server: databases[databaseName].config.server,
       database: databases[databaseName].config.database,
-    }, 'DB_TEST');
+    };
+    
+    if (flowLog) {
+      flowLog.error(`Connection test error`, error);
+    } else {
+      logger.error(`Connection test error for database: ${databaseName}`, logData, 'DB_TEST');
+    }
     return false;
   }
 }
@@ -492,11 +510,17 @@ export interface TableInfo {
  * is established with that specific database in the config.
  * INFORMATION_SCHEMA.TABLES automatically returns tables only from the current database context.
  */
-export async function getTables(databaseName: DatabaseName): Promise<TableInfo[]> {
+export async function getTables(databaseName: DatabaseName, flowId?: string): Promise<TableInfo[]> {
+  const flowLog = flowId ? logger.createFlowLogger(flowId) : null;
+  
   try {
-    logger.info(`Fetching tables from database: ${databaseName}...`, {
-      database: databaseName,
-    }, 'DB_TABLES');
+    if (flowLog) {
+      flowLog.info(`Querying INFORMATION_SCHEMA.TABLES`);
+    } else {
+      logger.info(`Fetching tables from database: ${databaseName}...`, {
+        database: databaseName,
+      }, 'DB_TABLES');
+    }
 
     // Query tables from the current database context
     // Since we connect to a specific database via getConnection(databaseName),
@@ -520,11 +544,15 @@ export async function getTables(databaseName: DatabaseName): Promise<TableInfo[]
       const db = databases[databaseName];
       const expectedDatabase = db.config.database; // Use actual database name from config
       if (currentDb && currentDb !== expectedDatabase) {
-        logger.warn(`Database context mismatch detected. Expected ${expectedDatabase}, got ${currentDb}`, {
-          expected: expectedDatabase,
-          actual: currentDb,
-          databaseName, // System key (database_1 or database_2)
-        }, 'DB_TABLES');
+        if (flowLog) {
+          flowLog.warn(`Database context mismatch: Expected ${expectedDatabase}, got ${currentDb}`);
+        } else {
+          logger.warn(`Database context mismatch detected. Expected ${expectedDatabase}, got ${currentDb}`, {
+            expected: expectedDatabase,
+            actual: currentDb,
+            databaseName, // System key (database_1 or database_2)
+          }, 'DB_TABLES');
+        }
       }
     }
     
@@ -535,17 +563,25 @@ export async function getTables(databaseName: DatabaseName): Promise<TableInfo[]
       TABLE_TYPE: table.TABLE_TYPE,
     }));
     
-    logger.success(`Successfully fetched ${cleanedTables.length} tables from database: ${databaseName}`, {
-      database: databaseName,
-      tableCount: cleanedTables.length,
-    }, 'DB_TABLES');
+    if (flowLog) {
+      flowLog.success(`Fetched ${cleanedTables.length} tables`);
+    } else {
+      logger.success(`Successfully fetched ${cleanedTables.length} tables from database: ${databaseName}`, {
+        database: databaseName,
+        tableCount: cleanedTables.length,
+      }, 'DB_TABLES');
+    }
 
     return cleanedTables;
   } catch (error) {
-    logger.error(`Error fetching tables from database: ${databaseName}`, {
-      error,
-      database: databaseName,
-    }, 'DB_TABLES');
+    if (flowLog) {
+      flowLog.error(`Error fetching tables`, error);
+    } else {
+      logger.error(`Error fetching tables from database: ${databaseName}`, {
+        error,
+        database: databaseName,
+      }, 'DB_TABLES');
+    }
     throw error;
   }
 }
@@ -584,21 +620,28 @@ export async function getTableData(
   schemaName: string,
   tableName: string,
   limit: number = 100,
-  offset: number = 0
+  offset: number = 0,
+  flowId?: string
 ): Promise<{
   columns: string[];
   rows: Record<string, unknown>[];
   totalRows: number;
   hasMore: boolean;
 }> {
+  const flowLog = flowId ? logger.createFlowLogger(flowId) : null;
+  
   try {
-    logger.info(`Fetching data from table: ${schemaName}.${tableName}`, {
-      database: databaseName,
-      schema: schemaName,
-      table: tableName,
-      limit,
-      offset,
-    }, 'DB_TABLE_DATA');
+    if (flowLog) {
+      flowLog.info(`Getting total row count`);
+    } else {
+      logger.info(`Fetching data from table: ${schemaName}.${tableName}`, {
+        database: databaseName,
+        schema: schemaName,
+        table: tableName,
+        limit,
+        offset,
+      }, 'DB_TABLE_DATA');
+    }
 
     // Get total row count
     const countResult = await query<{ total: number }>(databaseName, `
@@ -606,6 +649,10 @@ export async function getTableData(
       FROM [${schemaName}].[${tableName}]
     `);
     const totalRows = countResult.recordset[0]?.total || 0;
+
+    if (flowLog) {
+      flowLog.info(`Total rows: ${totalRows}, fetching data with pagination (limit: ${limit}, offset: ${offset})`);
+    }
 
     // Get table data with pagination
     const dataResult = await query(databaseName, `
@@ -634,14 +681,18 @@ export async function getTableData(
 
     const hasMore = offset + rows.length < totalRows;
 
-    logger.success(`Successfully fetched ${rows.length} rows from ${schemaName}.${tableName}`, {
-      database: databaseName,
-      schema: schemaName,
-      table: tableName,
-      rowsReturned: rows.length,
-      totalRows,
-      hasMore,
-    }, 'DB_TABLE_DATA');
+    if (flowLog) {
+      flowLog.success(`Fetched ${rows.length} rows (${columns.length} columns)`);
+    } else {
+      logger.success(`Successfully fetched ${rows.length} rows from ${schemaName}.${tableName}`, {
+        database: databaseName,
+        schema: schemaName,
+        table: tableName,
+        rowsReturned: rows.length,
+        totalRows,
+        hasMore,
+      }, 'DB_TABLE_DATA');
+    }
 
     return {
       columns,
@@ -650,12 +701,16 @@ export async function getTableData(
       hasMore,
     };
   } catch (error) {
-    logger.error(`Error fetching data from table: ${schemaName}.${tableName}`, {
-      error,
-      database: databaseName,
-      schema: schemaName,
-      table: tableName,
-    }, 'DB_TABLE_DATA');
+    if (flowLog) {
+      flowLog.error(`Error fetching table data`, error);
+    } else {
+      logger.error(`Error fetching data from table: ${schemaName}.${tableName}`, {
+        error,
+        database: databaseName,
+        schema: schemaName,
+        table: tableName,
+      }, 'DB_TABLE_DATA');
+    }
     throw error;
   }
 }
@@ -679,14 +734,21 @@ export interface ForeignKeyInfo {
 export async function getTableForeignKeys(
   databaseName: DatabaseName,
   schemaName: string,
-  tableName: string
+  tableName: string,
+  flowId?: string
 ): Promise<ForeignKeyInfo[]> {
+  const flowLog = flowId ? logger.createFlowLogger(flowId) : null;
+  
   try {
-    logger.info(`Fetching foreign keys for table: ${schemaName}.${tableName}`, {
-      database: databaseName,
-      schema: schemaName,
-      table: tableName,
-    }, 'DB_FOREIGN_KEYS');
+    if (flowLog) {
+      flowLog.info(`Querying sys.foreign_keys for ${schemaName}.${tableName}`);
+    } else {
+      logger.info(`Fetching foreign keys for table: ${schemaName}.${tableName}`, {
+        database: databaseName,
+        schema: schemaName,
+        table: tableName,
+      }, 'DB_FOREIGN_KEYS');
+    }
 
     // Escape schema and table names for SQL injection prevention
     const escapedSchema = schemaName.replace(/]/g, ']]');
@@ -711,21 +773,29 @@ export async function getTableForeignKeys(
 
     const foreignKeys = result.recordset;
 
-    logger.success(`Successfully fetched ${foreignKeys.length} foreign keys for ${schemaName}.${tableName}`, {
-      database: databaseName,
-      schema: schemaName,
-      table: tableName,
-      foreignKeyCount: foreignKeys.length,
-    }, 'DB_FOREIGN_KEYS');
+    if (flowLog) {
+      flowLog.success(`Fetched ${foreignKeys.length} foreign keys`);
+    } else {
+      logger.success(`Successfully fetched ${foreignKeys.length} foreign keys for ${schemaName}.${tableName}`, {
+        database: databaseName,
+        schema: schemaName,
+        table: tableName,
+        foreignKeyCount: foreignKeys.length,
+      }, 'DB_FOREIGN_KEYS');
+    }
 
     return foreignKeys;
   } catch (error) {
-    logger.error(`Error fetching foreign keys for table: ${schemaName}.${tableName}`, {
-      error,
-      database: databaseName,
-      schema: schemaName,
-      table: tableName,
-    }, 'DB_FOREIGN_KEYS');
+    if (flowLog) {
+      flowLog.error(`Error fetching foreign keys`, error);
+    } else {
+      logger.error(`Error fetching foreign keys for table: ${schemaName}.${tableName}`, {
+        error,
+        database: databaseName,
+        schema: schemaName,
+        table: tableName,
+      }, 'DB_FOREIGN_KEYS');
+    }
     throw error;
   }
 }
@@ -761,34 +831,79 @@ async function findFullNameExpression(
     const lowerColumns = columns.map(c => c.toLowerCase());
 
     // Look for Ho (Last name) and Ten (First name) columns
-    const hoPatterns = ['ho', 'lastname', 'surname', 'familyname'];
-    const tenPatterns = ['ten', 'firstname', 'givenname', 'forename'];
+    // Support both Vietnamese and English column names
+    const hoPatterns = [
+      'ho', 'họ', 'lastname', 'surname', 'familyname', 
+      'holot', 'họ lót', 'holoten', 'họ và tên'
+    ];
+    const tenPatterns = [
+      'ten', 'tên', 'firstname', 'givenname', 'forename',
+      'hoten', 'họ tên', 'holoten', 'họ và tên'
+    ];
     
     let hoColumn: string | null = null;
     let tenColumn: string | null = null;
 
-    // Find Ho column
+    // Find Ho column - check exact match first, then contains
     for (const pattern of hoPatterns) {
-      const found = columns.find((col, idx) => 
-        lowerColumns[idx] === pattern || 
-        lowerColumns[idx].includes(pattern)
+      const patternLower = pattern.toLowerCase();
+      // Try exact match first
+      const exactMatch = columns.find((col, idx) => 
+        lowerColumns[idx] === patternLower
       );
-      if (found) {
-        hoColumn = found;
+      if (exactMatch) {
+        hoColumn = exactMatch;
+        break;
+      }
+      // Then try contains
+      const containsMatch = columns.find((col, idx) => 
+        lowerColumns[idx].includes(patternLower) && 
+        !lowerColumns[idx].includes('ten') && // Exclude columns that contain both ho and ten
+        !lowerColumns[idx].includes('tên')
+      );
+      if (containsMatch) {
+        hoColumn = containsMatch;
         break;
       }
     }
 
-    // Find Ten column
+    // Find Ten column - check exact match first, then contains
     for (const pattern of tenPatterns) {
-      const found = columns.find((col, idx) => 
-        lowerColumns[idx] === pattern || 
-        lowerColumns[idx].includes(pattern)
+      const patternLower = pattern.toLowerCase();
+      // Try exact match first
+      const exactMatch = columns.find((col, idx) => 
+        lowerColumns[idx] === patternLower
       );
-      if (found) {
-        tenColumn = found;
+      if (exactMatch) {
+        tenColumn = exactMatch;
         break;
       }
+      // Then try contains, but exclude columns that are "Ho" or "Họ"
+      const containsMatch = columns.find((col, idx) => 
+        lowerColumns[idx].includes(patternLower) && 
+        !lowerColumns[idx].includes('ho') && 
+        !lowerColumns[idx].includes('họ')
+      );
+      if (containsMatch) {
+        tenColumn = containsMatch;
+        break;
+      }
+    }
+    
+    // Special case: if there's a column "Họ và Tên" or "HoTen", use it directly
+    const fullNameColumn = columns.find((col, idx) => {
+      const lower = lowerColumns[idx];
+      return lower === 'họ và tên' || 
+             lower === 'họ và tên' ||
+             lower === 'holoten' ||
+             lower === 'hoten' ||
+             lower.includes('họ và tên') ||
+             lower.includes('holoten');
+    });
+    
+    if (fullNameColumn && !hoColumn && !tenColumn) {
+      const escapedFullName = fullNameColumn.replace(/]/g, ']]');
+      return `${alias}.[${escapedFullName}]`;
     }
 
     // If both found, concatenate them
@@ -836,12 +951,21 @@ async function findDisplayColumn(
 ): Promise<{ expression: string; isFullName: boolean }> {
   try {
     // Check if this is an Oid or similar user/person reference
+    // Check exact match first, then contains
+    const fkLower = fkColumnName?.toLowerCase() || '';
     const isPersonReference = fkColumnName && (
-      fkColumnName.toLowerCase().includes('oid') ||
-      fkColumnName.toLowerCase().includes('userid') ||
-      fkColumnName.toLowerCase().includes('nhanvienid') ||
-      fkColumnName.toLowerCase().includes('personid') ||
-      fkColumnName.toLowerCase().includes('nguoidungid')
+      fkLower === 'oid' ||
+      fkLower.includes('oid') ||
+      fkLower === 'userid' ||
+      fkLower.includes('userid') ||
+      fkLower === 'nhanvienid' ||
+      fkLower.includes('nhanvienid') ||
+      fkLower === 'personid' ||
+      fkLower.includes('personid') ||
+      fkLower === 'nguoidungid' ||
+      fkLower.includes('nguoidungid') ||
+      fkLower === 'nhanvien' ||
+      fkLower.includes('nhanvien')
     );
 
     // If it's a person reference, try to find full name first
@@ -916,7 +1040,8 @@ export async function getTableDataWithReferences(
   schemaName: string,
   tableName: string,
   limit: number = 100,
-  offset: number = 0
+  offset: number = 0,
+  flowId?: string
 ): Promise<{
   columns: string[];
   rows: Record<string, unknown>[];
@@ -924,17 +1049,23 @@ export async function getTableDataWithReferences(
   hasMore: boolean;
   relationships: ForeignKeyInfo[];
 }> {
+  const flowLog = flowId ? logger.createFlowLogger(flowId) : null;
+  
   try {
-    logger.info(`Fetching data with references from table: ${schemaName}.${tableName}`, {
-      database: databaseName,
-      schema: schemaName,
-      table: tableName,
-      limit,
-      offset,
-    }, 'DB_TABLE_DATA_WITH_REFS');
+    if (flowLog) {
+      flowLog.info(`Fetching foreign keys for table`);
+    } else {
+      logger.info(`Fetching data with references from table: ${schemaName}.${tableName}`, {
+        database: databaseName,
+        schema: schemaName,
+        table: tableName,
+        limit,
+        offset,
+      }, 'DB_TABLE_DATA_WITH_REFS');
+    }
 
     // Get foreign keys for this table
-    const foreignKeys = await getTableForeignKeys(databaseName, schemaName, tableName);
+    const foreignKeys = await getTableForeignKeys(databaseName, schemaName, tableName, flowId);
 
     // Escape schema and table names for count query
     const escapedCountSchema = schemaName.replace(/]/g, ']]');
@@ -949,11 +1080,18 @@ export async function getTableDataWithReferences(
 
     // If no foreign keys, just get regular data
     if (foreignKeys.length === 0) {
-      const regularData = await getTableData(databaseName, schemaName, tableName, limit, offset);
+      if (flowLog) {
+        flowLog.info(`No foreign keys found, using regular data fetch`);
+      }
+      const regularData = await getTableData(databaseName, schemaName, tableName, limit, offset, flowId);
       return {
         ...regularData,
         relationships: [],
       };
+    }
+
+    if (flowLog) {
+      flowLog.info(`Found ${foreignKeys.length} foreign keys, building joins`);
     }
 
     // First, get all columns from the table to maintain original order
@@ -1035,15 +1173,47 @@ export async function getTableDataWithReferences(
             if (fullNameExpr) {
               displayValueExpr = fullNameExpr;
             } else {
-              // Fallback to regular display column search
-              const regularDisplay = await findDisplayColumn(
-                databaseName,
-                fkInfo.fk.PK_SCHEMA,
-                fkInfo.fk.PK_TABLE,
-                fkInfo.fk.PK_COLUMN
-              );
-              displayValueExpr = regularDisplay.expression.replace('{alias}', fkInfo.alias) || 
-                `${fkInfo.alias}.[${fkInfo.fk.PK_COLUMN.replace(/]/g, ']]')}]`;
+              // Fallback: try to find any name-like column in the referenced table
+              // Get all columns from the referenced table
+              const refColumnsResult = await query<{ COLUMN_NAME: string }>(databaseName, `
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = N'${fkInfo.fk.PK_SCHEMA.replace(/'/g, "''")}'
+                  AND TABLE_NAME = N'${fkInfo.fk.PK_TABLE.replace(/'/g, "''")}'
+                  AND COLUMN_NAME != N'${fkInfo.fk.PK_COLUMN.replace(/'/g, "''")}'
+                ORDER BY ORDINAL_POSITION
+              `);
+              
+              const refColumns = refColumnsResult.recordset.map(r => r.COLUMN_NAME);
+              const namePatterns = ['name', 'ten', 'tên', 'hoten', 'họ tên', 'holoten', 'họ và tên'];
+              
+              // Try to find a name column
+              let nameColumn: string | null = null;
+              for (const pattern of namePatterns) {
+                const found = refColumns.find(col => 
+                  col.toLowerCase() === pattern || 
+                  col.toLowerCase().includes(pattern.toLowerCase())
+                );
+                if (found) {
+                  nameColumn = found;
+                  break;
+                }
+              }
+              
+              if (nameColumn) {
+                const escapedName = nameColumn.replace(/]/g, ']]');
+                displayValueExpr = `${fkInfo.alias}.[${escapedName}]`;
+              } else {
+                // Last resort: use the first non-PK column
+                const firstCol = refColumns[0];
+                if (firstCol) {
+                  const escapedFirst = firstCol.replace(/]/g, ']]');
+                  displayValueExpr = `${fkInfo.alias}.[${escapedFirst}]`;
+                } else {
+                  // Ultimate fallback: use PK column itself
+                  displayValueExpr = `${fkInfo.alias}.[${fkInfo.fk.PK_COLUMN.replace(/]/g, ']]')}]`;
+                }
+              }
             }
           } else {
             // Use regular display column
@@ -1090,17 +1260,21 @@ export async function getTableDataWithReferences(
     const joinClause = joinClauses.join(' ');
 
     // Log the join conditions for debugging
-    logger.debug(`Building query with ${foreignKeys.length} foreign key joins`, {
-      database: databaseName,
-      schema: schemaName,
-      table: tableName,
-      foreignKeys: foreignKeys.map(fk => ({
-        fkColumn: fk.FK_COLUMN,
-        pkTable: `${fk.PK_SCHEMA}.${fk.PK_TABLE}`,
-        pkColumn: fk.PK_COLUMN,
-      })),
-      joinCount: joinClauses.length,
-    }, 'DB_TABLE_DATA_WITH_REFS');
+    if (flowLog) {
+      flowLog.debug(`Building query with ${foreignKeys.length} foreign key joins`);
+    } else {
+      logger.debug(`Building query with ${foreignKeys.length} foreign key joins`, {
+        database: databaseName,
+        schema: schemaName,
+        table: tableName,
+        foreignKeys: foreignKeys.map(fk => ({
+          fkColumn: fk.FK_COLUMN,
+          pkTable: `${fk.PK_SCHEMA}.${fk.PK_TABLE}`,
+          pkColumn: fk.PK_COLUMN,
+        })),
+        joinCount: joinClauses.length,
+      }, 'DB_TABLE_DATA_WITH_REFS');
+    }
 
     const dataResult = await query(databaseName, `
       SELECT TOP ${limit} *
@@ -1129,15 +1303,19 @@ export async function getTableDataWithReferences(
 
     const hasMore = offset + rows.length < totalRows;
 
-    logger.success(`Successfully fetched ${rows.length} rows with references from ${schemaName}.${tableName}`, {
-      database: databaseName,
-      schema: schemaName,
-      table: tableName,
-      rowsReturned: rows.length,
-      totalRows,
-      hasMore,
-      relationshipCount: foreignKeys.length,
-    }, 'DB_TABLE_DATA_WITH_REFS');
+    if (flowLog) {
+      flowLog.success(`Fetched ${rows.length} rows with references (${columns.length} columns, ${foreignKeys.length} relationships)`);
+    } else {
+      logger.success(`Successfully fetched ${rows.length} rows with references from ${schemaName}.${tableName}`, {
+        database: databaseName,
+        schema: schemaName,
+        table: tableName,
+        rowsReturned: rows.length,
+        totalRows,
+        hasMore,
+        relationshipCount: foreignKeys.length,
+      }, 'DB_TABLE_DATA_WITH_REFS');
+    }
 
     return {
       columns,
@@ -1147,12 +1325,16 @@ export async function getTableDataWithReferences(
       relationships: foreignKeys,
     };
   } catch (error) {
-    logger.error(`Error fetching data with references from table: ${schemaName}.${tableName}`, {
-      error,
-      database: databaseName,
-      schema: schemaName,
-      table: tableName,
-    }, 'DB_TABLE_DATA_WITH_REFS');
+    if (flowLog) {
+      flowLog.error(`Error fetching data with references`, error);
+    } else {
+      logger.error(`Error fetching data with references from table: ${schemaName}.${tableName}`, {
+        error,
+        database: databaseName,
+        schema: schemaName,
+        table: tableName,
+      }, 'DB_TABLE_DATA_WITH_REFS');
+    }
     throw error;
   }
 }

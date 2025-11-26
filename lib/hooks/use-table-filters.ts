@@ -1,62 +1,51 @@
 import { useState, useMemo, useCallback } from "react";
+import { logger } from "@/lib/logger";
+import { useDebounce } from "./use-debounce";
 
-interface UseTableFiltersProps<T extends Record<string, unknown>> {
-  rows: T[];
+interface UseTableFiltersProps {
+  debounceDelay?: number;
 }
 
-export interface UseTableFiltersReturn<T extends Record<string, unknown>> {
+export interface UseTableFiltersReturn {
   filters: Record<string, string>;
+  debouncedFilters: Record<string, string>;
   setFilters: React.Dispatch<React.SetStateAction<Record<string, string>>>;
   showFilters: boolean;
   setShowFilters: (show: boolean) => void;
-  filteredRows: T[];
-  filteredRowCount: number;
   hasActiveFilters: boolean;
+  activeFilterCount: number;
   handleFilterChange: (column: string, value: string) => void;
   handleClearFilters: () => void;
   handleClearFilter: (column: string) => void;
 }
 
-/**
- * Custom hook for table filtering logic
- */
-export function useTableFilters<T extends Record<string, unknown>>({
-  rows,
-}: UseTableFiltersProps<T>): UseTableFiltersReturn<T> {
+export function useTableFilters({
+  debounceDelay = 300,
+}: UseTableFiltersProps = {}): UseTableFiltersReturn {
   const [filters, setFilters] = useState<Record<string, string>>({});
   const [showFilters, setShowFilters] = useState(false);
 
-  // Filter rows based on filter values
-  const filteredRows = useMemo(() => {
-    if (!rows || rows.length === 0) return [];
-
-    const activeFilters = Object.entries(filters).filter(
-      ([, value]) => value.trim() !== ""
-    );
-    if (activeFilters.length === 0) return rows;
-
-    return rows.filter((row) => {
-      return activeFilters.every(([column, filterValue]) => {
-        const cellValue = row[column];
-        if (cellValue === null || cellValue === undefined) {
-          return filterValue.toLowerCase() === "null";
-        }
-        return String(cellValue)
-          .toLowerCase()
-          .includes(filterValue.toLowerCase());
-      });
-    });
-  }, [rows, filters]);
-
-  // Memoize computed values
-  const filteredRowCount = useMemo(() => filteredRows.length, [filteredRows.length]);
+  const debouncedFilters = useDebounce(filters, debounceDelay);
   const hasActiveFilters = useMemo(
     () => Object.values(filters).some((value) => value.trim() !== ""),
     [filters]
   );
+  const activeFilterCount = useMemo(
+    () => Object.values(filters).filter((v) => v.trim() !== "").length,
+    [filters]
+  );
 
-  // Memoize handlers with useCallback
   const handleFilterChange = useCallback((column: string, value: string) => {
+    logger.debug(
+      `Filter changed for column: ${column}`,
+      {
+        column,
+        value,
+        valueLength: value.length,
+        isEmpty: value.trim() === "",
+      },
+      "TABLE_FILTER"
+    );
     setFilters((prev) => ({
       ...prev,
       [column]: value,
@@ -64,25 +53,50 @@ export function useTableFilters<T extends Record<string, unknown>>({
   }, []);
 
   const handleClearFilters = useCallback(() => {
+    const activeFilterCount = Object.values(filters).filter(
+      (v) => v.trim() !== ""
+    ).length;
+    logger.info(
+      `Cleared all filters (${activeFilterCount} active filter(s) removed)`,
+      {
+        clearedFilters: Object.keys(filters).filter(
+          (col) => filters[col]?.trim() !== ""
+        ),
+      },
+      "TABLE_FILTER"
+    );
     setFilters({});
-  }, []);
+  }, [filters]);
 
-  const handleClearFilter = useCallback((column: string) => {
-    setFilters((prev) => {
-      const newFilters = { ...prev };
-      delete newFilters[column];
-      return newFilters;
-    });
-  }, []);
+  const handleClearFilter = useCallback(
+    (column: string) => {
+      const hadValue = filters[column]?.trim() !== "";
+      logger.debug(
+        `Cleared filter for column: ${column}`,
+        {
+          column,
+          hadValue,
+          previousValue: filters[column] || "",
+        },
+        "TABLE_FILTER"
+      );
+      setFilters((prev) => {
+        const newFilters = { ...prev };
+        delete newFilters[column];
+        return newFilters;
+      });
+    },
+    [filters]
+  );
 
   return {
     filters,
+    debouncedFilters,
     setFilters,
     showFilters,
     setShowFilters,
-    filteredRows,
-    filteredRowCount,
     hasActiveFilters,
+    activeFilterCount,
     handleFilterChange,
     handleClearFilters,
     handleClearFilter,

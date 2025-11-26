@@ -2,11 +2,48 @@
  * Utility functions for table column operations
  */
 
+import { HIDDEN_COLUMNS, HIDDEN_COLUMN_PATTERNS } from '@/lib/constants/table-constants';
+
 /**
  * Normalizes column names for comparison (trim and lowercase)
  */
 export function normalizeColumnName(column: string | number): string {
   return String(column).trim().toLowerCase();
+}
+
+/**
+ * Checks if a column should be hidden based on constants
+ * @param columnName - The column name to check
+ * @returns true if the column should be hidden, false otherwise
+ */
+export function shouldHideColumn(columnName: string | number): boolean {
+  const colStr = String(columnName).trim();
+  const colLower = colStr.toLowerCase();
+  
+  // Check exact matches (case-insensitive)
+  if (HIDDEN_COLUMNS.some(hidden => colLower === hidden.toLowerCase())) {
+    return true;
+  }
+  
+  // Check patterns (endsWith)
+  if (HIDDEN_COLUMN_PATTERNS.some(pattern => colStr.endsWith(pattern))) {
+    return true;
+  }
+  
+  return false;
+}
+
+/**
+ * Filters out hidden columns from a column array
+ * @param columns - Array of column names
+ * @returns Filtered array with hidden columns removed
+ */
+export function filterHiddenColumns(columns: (string | number)[]): string[] {
+  if (!columns || columns.length === 0) return [];
+  
+  return columns
+    .filter(col => !shouldHideColumn(col))
+    .map(col => String(col));
 }
 
 /**

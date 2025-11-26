@@ -147,7 +147,7 @@ export function useFetchTables() {
   });
 }
 
-interface ForeignKeyInfo {
+export interface ForeignKeyInfo {
   FK_NAME: string;
   FK_SCHEMA: string;
   FK_TABLE: string;
@@ -170,6 +170,8 @@ interface TableDataResponse {
     hasMore: boolean;
     limit: number;
     offset: number;
+    filteredRowCount?: number;
+    filtersApplied?: Record<string, string>;
     relationships?: ForeignKeyInfo[];
   };
   error?: string;
@@ -185,15 +187,47 @@ export function useTableData(
   limit: number = 100,
   offset: number = 0,
   enabled: boolean = true,
-  includeReferences: boolean = false
+  includeReferences: boolean = false,
+  filters?: Record<string, string>
 ) {
+  const sanitizedFilters =
+    filters && typeof filters === "object"
+      ? Object.fromEntries(
+          Object.entries(filters).filter(
+            ([, value]) => typeof value === "string" && value.trim() !== ""
+          )
+        )
+      : undefined;
+  const filtersKey =
+    sanitizedFilters && Object.keys(sanitizedFilters).length > 0
+      ? JSON.stringify(sanitizedFilters)
+      : "no-filters";
+
   return useQuery({
-    queryKey: [...databaseQueryKeys.all, 'table-data', databaseName, schemaName, tableName, limit, offset, includeReferences] as const,
+    queryKey: [
+      ...databaseQueryKeys.all,
+      "table-data",
+      databaseName,
+      schemaName,
+      tableName,
+      limit,
+      offset,
+      includeReferences,
+      filtersKey,
+    ] as const,
     queryFn: async () => {
       if (!databaseName || !schemaName || !tableName) {
         throw new Error('Database, schema, and table are required');
       }
-      const url = `/api/db/table-data?database=${databaseName}&schema=${encodeURIComponent(schemaName)}&table=${encodeURIComponent(tableName)}&limit=${limit}&offset=${offset}${includeReferences ? '&includeReferences=true' : ''}`;
+      const filtersQuery =
+        sanitizedFilters && Object.keys(sanitizedFilters).length > 0
+          ? `&filters=${encodeURIComponent(JSON.stringify(sanitizedFilters))}`
+          : "";
+      const url = `/api/db/table-data?database=${databaseName}&schema=${encodeURIComponent(
+        schemaName
+      )}&table=${encodeURIComponent(tableName)}&limit=${limit}&offset=${offset}${
+        includeReferences ? "&includeReferences=true" : ""
+      }${filtersQuery}`;
       const response = await axiosClient.get<TableDataResponse>(url);
       return response.data;
     },

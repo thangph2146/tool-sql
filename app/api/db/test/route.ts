@@ -4,24 +4,33 @@ import { logger } from '@/lib/logger';
 import { type ServerInfo } from '@/lib/db-manager';
 
 export async function GET(request: Request) {
-  try {
-    const { searchParams } = new URL(request.url);
-    const databaseParam = searchParams.get('database') as DatabaseName | null;
+  const { searchParams } = new URL(request.url);
+  const databaseParam = searchParams.get('database') as DatabaseName | null;
+  
+  const flowName = databaseParam 
+    ? `API_TEST_CONNECTION_${databaseParam.toUpperCase()}`
+    : 'API_TEST_CONNECTION_ALL';
+  const flowId = logger.startFlow(flowName, { database: databaseParam || 'all' });
+  const flowLog = logger.createFlowLogger(flowId);
 
+  try {
     if (databaseParam && (databaseParam === 'database_1' || databaseParam === 'database_2')) {
       // Test single database
-      logger.info(`API test connection called for database: ${databaseParam}`, undefined, 'API_DB_TEST');
+      flowLog.info(`Testing connection for database: ${databaseParam}`);
       
-      const isConnected = await testConnection(databaseParam);
+      const isConnected = await testConnection(databaseParam, flowId);
       
       if (!isConnected) {
-        logger.warn(`Database connection failed for: ${databaseParam}`, undefined, 'API_DB_TEST');
+        flowLog.error(`Connection failed for: ${databaseParam}`);
+        flowLog.end(false, { connected: false });
         return NextResponse.json(
           { success: false, message: `Unable to connect to database: ${databaseParam}` },
           { status: 500 }
         );
       }
 
+      flowLog.success(`Connection test passed, fetching server info`);
+      
       // Get server information
       const serverInfo = await query(databaseParam, `
         SELECT 
@@ -31,9 +40,10 @@ export async function GET(request: Request) {
           SYSTEM_USER as CurrentUser
       `);
 
-      logger.success(`API test connection successful for database: ${databaseParam}`, { 
+      flowLog.end(true, { 
+        connected: true,
         serverInfo: serverInfo.recordset[0] 
-      }, 'API_DB_TEST');
+      });
 
       return NextResponse.json({
         success: true,
@@ -46,16 +56,18 @@ export async function GET(request: Request) {
       });
     } else {
       // Test all databases
-      logger.info('API test connection called for all databases', undefined, 'API_DB_TEST');
+      flowLog.info('Testing connections for all databases');
       
       const results = await testAllConnections();
       
       const allConnected = Object.values(results).every(connected => connected);
       
       if (!allConnected) {
-        logger.warn('Some database connections failed', results, 'API_DB_TEST');
+        flowLog.warn('Some database connections failed', results);
       }
 
+      flowLog.info('Fetching server info for connected databases');
+      
       // Get server info for each connected database
       const serverInfos: Record<string, ServerInfo> = {};
       
@@ -70,16 +82,17 @@ export async function GET(request: Request) {
                 SYSTEM_USER as CurrentUser
             `);
             serverInfos[dbName] = serverInfo.recordset[0] as unknown as ServerInfo;
+            flowLog.success(`Server info retrieved for ${dbName}`);
           } catch (error) {
-            logger.error(`Error getting server info for ${dbName}`, error, 'API_DB_TEST');
+            flowLog.error(`Error getting server info for ${dbName}`, error);
           }
         }
       }
 
-      logger.success('API test connection completed for all databases', { 
+      flowLog.end(allConnected, { 
         results,
         serverInfos 
-      }, 'API_DB_TEST');
+      });
 
       return NextResponse.json({
         success: allConnected,
@@ -93,7 +106,8 @@ export async function GET(request: Request) {
       });
     }
   } catch (error) {
-    logger.error('Error in API test connection', error, 'API_DB_TEST');
+    flowLog.error('Unexpected error in API test connection', error);
+    flowLog.end(false, { error: error instanceof Error ? error.message : 'Unknown error' });
     const errorMessage =
       error instanceof Error ? error.message : 'Unknown error';
     return NextResponse.json(
