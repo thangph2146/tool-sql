@@ -43,10 +43,23 @@ export function TableCell({ value }: TableCellProps) {
     );
   }
   
+  // Check if text contains newlines and split for multi-line display
+  const hasNewlines = displayText.includes('\n') || displayText.includes('\r\n');
+  
   return (
-    <div className="truncate" title={displayText}>
+    <div className={hasNewlines ? "whitespace-pre-line" : "truncate"} title={displayText}>
       {value !== null && value !== undefined ? (
-        displayText
+        hasNewlines ? (
+          <div className="flex flex-col gap-0.5">
+            {displayText.split(/\r?\n/).map((line, index) => (
+              <div key={index} className={index === 0 ? "font-medium text-foreground" : "text-xs text-muted-foreground"}>
+                {line}
+              </div>
+            ))}
+          </div>
+        ) : (
+          displayText
+        )
       ) : (
         <span className="text-muted-foreground italic">NULL</span>
       )}

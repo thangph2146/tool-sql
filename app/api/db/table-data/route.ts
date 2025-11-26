@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getTableData } from '@/lib/db-manager';
+import { getTableData, getTableDataWithReferences } from '@/lib/db-manager';
 import { getDatabaseConfig } from '@/lib/db-config';
 import type { DatabaseName } from '@/lib/db-config';
 import { logger } from '@/lib/logger';
@@ -12,6 +12,7 @@ export async function GET(request: NextRequest) {
     const tableName = searchParams.get('table');
     const limit = parseInt(searchParams.get('limit') || '100', 10);
     const offset = parseInt(searchParams.get('offset') || '0', 10);
+    const includeReferences = searchParams.get('includeReferences') === 'true';
 
     // Validate required parameters
     if (!databaseName || !schemaName || !tableName) {
@@ -81,14 +82,22 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Fetch table data
-    const tableData = await getTableData(
-      databaseName,
-      schemaName,
-      tableName,
-      limit,
-      offset
-    );
+    // Fetch table data (with or without references)
+    const tableData = includeReferences
+      ? await getTableDataWithReferences(
+          databaseName,
+          schemaName,
+          tableName,
+          limit,
+          offset
+        )
+      : await getTableData(
+          databaseName,
+          schemaName,
+          tableName,
+          limit,
+          offset
+        );
 
     logger.success(`API get table data successful for database: ${databaseName}`, {
       database: databaseName,
@@ -96,6 +105,10 @@ export async function GET(request: NextRequest) {
       table: tableName,
       rowsReturned: tableData.rows.length,
       totalRows: tableData.totalRows,
+      includeReferences,
+      relationshipCount: includeReferences && 'relationships' in tableData && Array.isArray(tableData.relationships)
+        ? tableData.relationships.length
+        : 0,
     }, 'API_DB_TABLE_DATA');
 
     return NextResponse.json({
@@ -111,6 +124,9 @@ export async function GET(request: NextRequest) {
         hasMore: tableData.hasMore,
         limit,
         offset,
+        ...(includeReferences && 'relationships' in tableData && Array.isArray(tableData.relationships)
+          ? { relationships: tableData.relationships }
+          : {}),
       },
     });
   } catch (error) {

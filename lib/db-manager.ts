@@ -660,6 +660,503 @@ export async function getTableData(
   }
 }
 
+/**
+ * Foreign key relationship information
+ */
+export interface ForeignKeyInfo {
+  FK_NAME: string;
+  FK_SCHEMA: string;
+  FK_TABLE: string;
+  FK_COLUMN: string;
+  PK_SCHEMA: string;
+  PK_TABLE: string;
+  PK_COLUMN: string;
+}
+
+/**
+ * Get foreign key relationships for a specific table
+ */
+export async function getTableForeignKeys(
+  databaseName: DatabaseName,
+  schemaName: string,
+  tableName: string
+): Promise<ForeignKeyInfo[]> {
+  try {
+    logger.info(`Fetching foreign keys for table: ${schemaName}.${tableName}`, {
+      database: databaseName,
+      schema: schemaName,
+      table: tableName,
+    }, 'DB_FOREIGN_KEYS');
+
+    // Escape schema and table names for SQL injection prevention
+    const escapedSchema = schemaName.replace(/]/g, ']]');
+    const escapedTable = tableName.replace(/]/g, ']]');
+    
+    const result = await query<ForeignKeyInfo>(databaseName, `
+      SELECT 
+        fk.name AS FK_NAME,
+        OBJECT_SCHEMA_NAME(fk.parent_object_id) AS FK_SCHEMA,
+        OBJECT_NAME(fk.parent_object_id) AS FK_TABLE,
+        COL_NAME(fkc.parent_object_id, fkc.parent_column_id) AS FK_COLUMN,
+        OBJECT_SCHEMA_NAME(fk.referenced_object_id) AS PK_SCHEMA,
+        OBJECT_NAME(fk.referenced_object_id) AS PK_TABLE,
+        COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id) AS PK_COLUMN
+      FROM sys.foreign_keys AS fk
+      INNER JOIN sys.foreign_key_columns AS fkc 
+        ON fk.object_id = fkc.constraint_object_id
+      WHERE OBJECT_SCHEMA_NAME(fk.parent_object_id) = N'${escapedSchema}'
+        AND OBJECT_NAME(fk.parent_object_id) = N'${escapedTable}'
+      ORDER BY fk.name, fkc.constraint_column_id
+    `);
+
+    const foreignKeys = result.recordset;
+
+    logger.success(`Successfully fetched ${foreignKeys.length} foreign keys for ${schemaName}.${tableName}`, {
+      database: databaseName,
+      schema: schemaName,
+      table: tableName,
+      foreignKeyCount: foreignKeys.length,
+    }, 'DB_FOREIGN_KEYS');
+
+    return foreignKeys;
+  } catch (error) {
+    logger.error(`Error fetching foreign keys for table: ${schemaName}.${tableName}`, {
+      error,
+      database: databaseName,
+      schema: schemaName,
+      table: tableName,
+    }, 'DB_FOREIGN_KEYS');
+    throw error;
+  }
+}
+
+/**
+ * Find columns for full name (Ho + Ten) in a referenced table
+ * Returns SQL expression to concatenate Ho and Ten columns
+ */
+async function findFullNameExpression(
+  databaseName: DatabaseName,
+  schemaName: string,
+  tableName: string,
+  alias: string,
+  excludeColumn: string
+): Promise<string | null> {
+  try {
+    // Escape schema, table, and column names for SQL injection prevention
+    const escapedSchema = schemaName.replace(/]/g, ']]');
+    const escapedTable = tableName.replace(/]/g, ']]');
+    const escapedExcludeColumn = excludeColumn.replace(/]/g, ']]');
+    
+    // Get all columns from the referenced table
+    const columnsResult = await query<{ COLUMN_NAME: string }>(databaseName, `
+      SELECT COLUMN_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = N'${escapedSchema}'
+        AND TABLE_NAME = N'${escapedTable}'
+        AND COLUMN_NAME != N'${escapedExcludeColumn}'
+      ORDER BY ORDINAL_POSITION
+    `);
+
+    const columns = columnsResult.recordset.map(r => r.COLUMN_NAME);
+    const lowerColumns = columns.map(c => c.toLowerCase());
+
+    // Look for Ho (Last name) and Ten (First name) columns
+    const hoPatterns = ['ho', 'lastname', 'surname', 'familyname'];
+    const tenPatterns = ['ten', 'firstname', 'givenname', 'forename'];
+    
+    let hoColumn: string | null = null;
+    let tenColumn: string | null = null;
+
+    // Find Ho column
+    for (const pattern of hoPatterns) {
+      const found = columns.find((col, idx) => 
+        lowerColumns[idx] === pattern || 
+        lowerColumns[idx].includes(pattern)
+      );
+      if (found) {
+        hoColumn = found;
+        break;
+      }
+    }
+
+    // Find Ten column
+    for (const pattern of tenPatterns) {
+      const found = columns.find((col, idx) => 
+        lowerColumns[idx] === pattern || 
+        lowerColumns[idx].includes(pattern)
+      );
+      if (found) {
+        tenColumn = found;
+        break;
+      }
+    }
+
+    // If both found, concatenate them
+    if (hoColumn && tenColumn) {
+      const escapedHo = hoColumn.replace(/]/g, ']]');
+      const escapedTen = tenColumn.replace(/]/g, ']]');
+      // Use LTRIM and RTRIM to handle NULL values and spaces
+      return `LTRIM(RTRIM(ISNULL(${alias}.[${escapedHo}], '') + ' ' + ISNULL(${alias}.[${escapedTen}], '')))`;
+    }
+
+    // If only one found, return it
+    if (hoColumn) {
+      const escapedHo = hoColumn.replace(/]/g, ']]');
+      return `${alias}.[${escapedHo}]`;
+    }
+    
+    if (tenColumn) {
+      const escapedTen = tenColumn.replace(/]/g, ']]');
+      return `${alias}.[${escapedTen}]`;
+    }
+
+    return null;
+  } catch (error) {
+    logger.warn(`Error finding full name columns for ${schemaName}.${tableName}`, {
+      error,
+      database: databaseName,
+      schema: schemaName,
+      table: tableName,
+    }, 'DB_FIND_FULL_NAME');
+    return null;
+  }
+}
+
+/**
+ * Find a suitable display column in a referenced table
+ * Looks for common column names like Name, Title, Ten, MoTa, etc.
+ * For Oid and similar FK columns, tries to find full name (Ho + Ten)
+ */
+async function findDisplayColumn(
+  databaseName: DatabaseName,
+  schemaName: string,
+  tableName: string,
+  excludeColumn: string,
+  fkColumnName?: string
+): Promise<{ expression: string; isFullName: boolean }> {
+  try {
+    // Check if this is an Oid or similar user/person reference
+    const isPersonReference = fkColumnName && (
+      fkColumnName.toLowerCase().includes('oid') ||
+      fkColumnName.toLowerCase().includes('userid') ||
+      fkColumnName.toLowerCase().includes('nhanvienid') ||
+      fkColumnName.toLowerCase().includes('personid') ||
+      fkColumnName.toLowerCase().includes('nguoidungid')
+    );
+
+    // If it's a person reference, try to find full name first
+    if (isPersonReference) {
+      // We'll need the alias later, so we'll handle this in the calling function
+      // For now, return a flag that we need full name
+      return { expression: '', isFullName: true };
+    }
+
+    // Common display column name patterns (priority order)
+    const displayPatterns = [
+      'Name', 'Ten', 'Title', 'TieuDe',
+      'MoTa', 'Description', 'GhiChu',
+      'Code', 'Ma', 'MaSo',
+    ];
+
+    // Escape schema, table, and column names for SQL injection prevention
+    const escapedSchema = schemaName.replace(/]/g, ']]');
+    const escapedTable = tableName.replace(/]/g, ']]');
+    const escapedExcludeColumn = excludeColumn.replace(/]/g, ']]');
+    
+    // Get all columns from the referenced table
+    const columnsResult = await query<{ COLUMN_NAME: string }>(databaseName, `
+      SELECT COLUMN_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = N'${escapedSchema}'
+        AND TABLE_NAME = N'${escapedTable}'
+        AND COLUMN_NAME != N'${escapedExcludeColumn}'
+      ORDER BY ORDINAL_POSITION
+    `);
+
+    const columns = columnsResult.recordset.map(r => r.COLUMN_NAME);
+
+    // Try to find a column matching our patterns
+    for (const pattern of displayPatterns) {
+      const found = columns.find(col => 
+        col === pattern || 
+        col.toLowerCase() === pattern.toLowerCase() ||
+        col.includes(pattern) ||
+        col.toLowerCase().includes(pattern.toLowerCase())
+      );
+      if (found) {
+        const escapedFound = found.replace(/]/g, ']]');
+        return { expression: `{alias}.[${escapedFound}]`, isFullName: false };
+      }
+    }
+
+    // If no pattern match, return the first non-PK column
+    if (columns.length > 0) {
+      const escapedFirst = columns[0].replace(/]/g, ']]');
+      return { expression: `{alias}.[${escapedFirst}]`, isFullName: false };
+    }
+
+    return { expression: '', isFullName: false };
+  } catch (error) {
+    logger.warn(`Error finding display column for ${schemaName}.${tableName}`, {
+      error,
+      database: databaseName,
+      schema: schemaName,
+      table: tableName,
+    }, 'DB_FIND_DISPLAY_COLUMN');
+    return { expression: '', isFullName: false };
+  }
+}
+
+/**
+ * Get table data with referenced data from foreign key relationships
+ * This will join with related tables to show actual data instead of just IDs
+ */
+export async function getTableDataWithReferences(
+  databaseName: DatabaseName,
+  schemaName: string,
+  tableName: string,
+  limit: number = 100,
+  offset: number = 0
+): Promise<{
+  columns: string[];
+  rows: Record<string, unknown>[];
+  totalRows: number;
+  hasMore: boolean;
+  relationships: ForeignKeyInfo[];
+}> {
+  try {
+    logger.info(`Fetching data with references from table: ${schemaName}.${tableName}`, {
+      database: databaseName,
+      schema: schemaName,
+      table: tableName,
+      limit,
+      offset,
+    }, 'DB_TABLE_DATA_WITH_REFS');
+
+    // Get foreign keys for this table
+    const foreignKeys = await getTableForeignKeys(databaseName, schemaName, tableName);
+
+    // Escape schema and table names for count query
+    const escapedCountSchema = schemaName.replace(/]/g, ']]');
+    const escapedCountTable = tableName.replace(/]/g, ']]');
+
+    // Get total row count
+    const countResult = await query<{ total: number }>(databaseName, `
+      SELECT COUNT(*) as total
+      FROM [${escapedCountSchema}].[${escapedCountTable}]
+    `);
+    const totalRows = countResult.recordset[0]?.total || 0;
+
+    // If no foreign keys, just get regular data
+    if (foreignKeys.length === 0) {
+      const regularData = await getTableData(databaseName, schemaName, tableName, limit, offset);
+      return {
+        ...regularData,
+        relationships: [],
+      };
+    }
+
+    // First, get all columns from the table to maintain original order
+    const allColumnsResult = await query<{ COLUMN_NAME: string }>(databaseName, `
+      SELECT COLUMN_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = N'${schemaName.replace(/'/g, "''")}'
+        AND TABLE_NAME = N'${tableName.replace(/'/g, "''")}'
+      ORDER BY ORDINAL_POSITION
+    `);
+    
+    const allColumns = allColumnsResult.recordset.map(r => r.COLUMN_NAME);
+    const fkColumnNames = new Set(foreignKeys.map(fk => fk.FK_COLUMN));
+    
+    // Create a map of FK column to its join alias and display column
+    const fkMap = new Map<string, { alias: string; displayColumn: { expression: string; isFullName: boolean }; fk: ForeignKeyInfo }>();
+    
+    // Build SELECT clause - keep all columns in original order, replace FK values with referenced data
+    const selectColumns: string[] = [];
+    const joinClauses: string[] = [];
+    
+    // Escape schema and table names
+    const escapedSchema = schemaName.replace(/]/g, ']]');
+    const escapedTable = tableName.replace(/]/g, ']]');
+    
+    // Process each foreign key to create joins first
+    for (let i = 0; i < foreignKeys.length; i++) {
+      const fk = foreignKeys[i];
+      
+      // Create a unique alias for each FK join
+      const alias = `ref_${fk.FK_COLUMN}_${i}`;
+      
+      // Escape column names for SQL injection prevention
+      const escapedFkColumn = fk.FK_COLUMN.replace(/]/g, ']]');
+      const escapedPkSchema = fk.PK_SCHEMA.replace(/]/g, ']]');
+      const escapedPkTable = fk.PK_TABLE.replace(/]/g, ']]');
+      const escapedPkColumn = fk.PK_COLUMN.replace(/]/g, ']]');
+      
+      // Create the join with the correct FK_COLUMN to PK_COLUMN mapping
+      joinClauses.push(`
+        LEFT JOIN [${escapedPkSchema}].[${escapedPkTable}] AS ${alias}
+          ON [${escapedSchema}].[${escapedTable}].[${escapedFkColumn}] = ${alias}.[${escapedPkColumn}]
+      `);
+      
+      // Find display column for this specific FK relationship
+      const displayInfo = await findDisplayColumn(
+        databaseName,
+        fk.PK_SCHEMA,
+        fk.PK_TABLE,
+        fk.PK_COLUMN,
+        fk.FK_COLUMN
+      );
+      
+      // Store FK mapping
+      fkMap.set(fk.FK_COLUMN, { alias, displayColumn: displayInfo, fk });
+    }
+    
+    // Now build SELECT clause maintaining original column order
+    for (const column of allColumns) {
+      const escapedColumn = column.replace(/]/g, ']]');
+      
+      if (fkColumnNames.has(column)) {
+        // This is an FK column - combine ID and display value in same column
+        const fkInfo = fkMap.get(column);
+        if (fkInfo) {
+          // Get display value from referenced table
+          let displayValueExpr: string;
+          
+          // Check if we need full name (Ho + Ten) for Oid and similar columns
+          if (fkInfo.displayColumn.isFullName) {
+            const fullNameExpr = await findFullNameExpression(
+              databaseName,
+              fkInfo.fk.PK_SCHEMA,
+              fkInfo.fk.PK_TABLE,
+              fkInfo.alias,
+              fkInfo.fk.PK_COLUMN
+            );
+            
+            if (fullNameExpr) {
+              displayValueExpr = fullNameExpr;
+            } else {
+              // Fallback to regular display column search
+              const regularDisplay = await findDisplayColumn(
+                databaseName,
+                fkInfo.fk.PK_SCHEMA,
+                fkInfo.fk.PK_TABLE,
+                fkInfo.fk.PK_COLUMN
+              );
+              displayValueExpr = regularDisplay.expression.replace('{alias}', fkInfo.alias) || 
+                `${fkInfo.alias}.[${fkInfo.fk.PK_COLUMN.replace(/]/g, ']]')}]`;
+            }
+          } else {
+            // Use regular display column
+            displayValueExpr = fkInfo.displayColumn.expression 
+              ? fkInfo.displayColumn.expression.replace('{alias}', fkInfo.alias)
+              : `${fkInfo.alias}.[${fkInfo.fk.PK_COLUMN.replace(/]/g, ']]')}]`;
+          }
+          
+          // Combine: display value + newline + "(ID: " + original ID + ")"
+          // Format: "DisplayValue\n(ID: OriginalID)" or just "OriginalID" if no display value
+          const originalIdColumn = `[${escapedSchema}].[${escapedTable}].[${escapedColumn}]`;
+          
+          // Build combined expression: if display value exists, show "DisplayValue\n(ID: OriginalID)", otherwise show just "OriginalID"
+          // Use CHAR(13) + CHAR(10) for Windows line break (CRLF) or just CHAR(10) for LF
+          const combinedExpr = `CASE 
+            WHEN ${displayValueExpr} IS NOT NULL AND LTRIM(RTRIM(CAST(${displayValueExpr} AS NVARCHAR(MAX)))) != '' 
+            THEN CAST(${displayValueExpr} AS NVARCHAR(MAX)) + CHAR(10) + '(ID: ' + CAST(${originalIdColumn} AS NVARCHAR(MAX)) + ')'
+            ELSE CAST(${originalIdColumn} AS NVARCHAR(MAX))
+          END`;
+          
+          // Use combined expression in the same column
+          selectColumns.push(`${combinedExpr} AS [${escapedColumn}]`);
+          
+          // Also keep original ID in a hidden column for filtering/reference
+          const originalIdColumnName = `${column}_OriginalId`;
+          const escapedOriginalIdColumnName = originalIdColumnName.replace(/]/g, ']]');
+          selectColumns.push(`${originalIdColumn} AS [${escapedOriginalIdColumnName}]`);
+        } else {
+          // Fallback: keep original column if FK info not found
+          selectColumns.push(`[${escapedSchema}].[${escapedTable}].[${escapedColumn}]`);
+        }
+      } else {
+        // Regular column - keep original value
+        selectColumns.push(`[${escapedSchema}].[${escapedTable}].[${escapedColumn}]`);
+      }
+    }
+
+    // Escape schema and table names for main query
+    const escapedMainSchema = schemaName.replace(/]/g, ']]');
+    const escapedMainTable = tableName.replace(/]/g, ']]');
+    
+    // Build the query with joins
+    const selectClause = selectColumns.join(', ');
+    const joinClause = joinClauses.join(' ');
+
+    // Log the join conditions for debugging
+    logger.debug(`Building query with ${foreignKeys.length} foreign key joins`, {
+      database: databaseName,
+      schema: schemaName,
+      table: tableName,
+      foreignKeys: foreignKeys.map(fk => ({
+        fkColumn: fk.FK_COLUMN,
+        pkTable: `${fk.PK_SCHEMA}.${fk.PK_TABLE}`,
+        pkColumn: fk.PK_COLUMN,
+      })),
+      joinCount: joinClauses.length,
+    }, 'DB_TABLE_DATA_WITH_REFS');
+
+    const dataResult = await query(databaseName, `
+      SELECT TOP ${limit} *
+      FROM (
+        SELECT ${selectClause}, ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) as rn
+        FROM [${escapedMainSchema}].[${escapedMainTable}]
+        ${joinClause}
+      ) AS t
+      WHERE t.rn > ${offset}
+      ORDER BY t.rn
+    `);
+
+    // Get rows and remove ROW_NUMBER column
+    const rows = Array.from(dataResult.recordset).map((row: unknown) => {
+      const rowObj = row as Record<string, unknown>;
+      // Remove ROW_NUMBER column from result
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { rn: _rn, ...rest } = rowObj;
+      return rest;
+    });
+
+    // Get column names from first row (excluding 'rn')
+    const columns = rows.length > 0 
+      ? Object.keys(rows[0])
+      : [];
+
+    const hasMore = offset + rows.length < totalRows;
+
+    logger.success(`Successfully fetched ${rows.length} rows with references from ${schemaName}.${tableName}`, {
+      database: databaseName,
+      schema: schemaName,
+      table: tableName,
+      rowsReturned: rows.length,
+      totalRows,
+      hasMore,
+      relationshipCount: foreignKeys.length,
+    }, 'DB_TABLE_DATA_WITH_REFS');
+
+    return {
+      columns,
+      rows,
+      totalRows,
+      hasMore,
+      relationships: foreignKeys,
+    };
+  } catch (error) {
+    logger.error(`Error fetching data with references from table: ${schemaName}.${tableName}`, {
+      error,
+      database: databaseName,
+      schema: schemaName,
+      table: tableName,
+    }, 'DB_TABLE_DATA_WITH_REFS');
+    throw error;
+  }
+}
+
 // Import auto test to automatically run when module is loaded
 if (typeof window === 'undefined') {
   // Import to trigger auto test

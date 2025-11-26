@@ -62,11 +62,70 @@ export function bufferToDataUrl(value: unknown): string | null {
 }
 
 /**
+ * Formats a date value to Vietnamese format (dd/MM/yyyy or dd/MM/yyyy HH:mm:ss)
+ */
+function formatDate(value: Date | string): string {
+  let date: Date;
+  
+  if (value instanceof Date) {
+    date = value;
+  } else if (typeof value === "string") {
+    // Try to parse ISO date string
+    date = new Date(value);
+    // Check if date is valid
+    if (isNaN(date.getTime())) {
+      return value; // Return original string if not a valid date
+    }
+  } else {
+    return String(value);
+  }
+
+  const day = String(date.getDate()).padStart(2, "0");
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const year = date.getFullYear();
+  const hours = String(date.getHours()).padStart(2, "0");
+  const minutes = String(date.getMinutes()).padStart(2, "0");
+  const seconds = String(date.getSeconds()).padStart(2, "0");
+
+  // Check if time is midnight (00:00:00) - likely a date-only value
+  const hasTime = date.getHours() !== 0 || date.getMinutes() !== 0 || date.getSeconds() !== 0 || date.getMilliseconds() !== 0;
+  
+  if (hasTime) {
+    return `${day}/${month}/${year} ${hours}:${minutes}:${seconds}`;
+  } else {
+    return `${day}/${month}/${year}`;
+  }
+}
+
+/**
+ * Checks if a value is a date string (ISO format or similar)
+ */
+function isDateString(value: string): boolean {
+  // ISO date pattern: YYYY-MM-DD or YYYY-MM-DDTHH:mm:ss.sssZ
+  const isoDatePattern = /^\d{4}-\d{2}-\d{2}(T\d{2}:\d{2}:\d{2}(\.\d{3})?Z?)?$/;
+  if (isoDatePattern.test(value)) {
+    const date = new Date(value);
+    return !isNaN(date.getTime());
+  }
+  return false;
+}
+
+/**
  * Formats cell value for display as text
  */
 export function formatCellValue(value: unknown): string {
   if (value === null || value === undefined) {
     return "";
+  }
+
+  // Check if it's a Date object
+  if (value instanceof Date) {
+    return formatDate(value);
+  }
+
+  // Check if it's a date string (ISO format)
+  if (typeof value === "string" && isDateString(value)) {
+    return formatDate(value);
   }
 
   // Check if it's a Buffer object (from database)

@@ -10,9 +10,10 @@ import {
   Database,
   Filter,
   XCircle,
+  Link2,
 } from "lucide-react";
 import type { DatabaseName } from "@/lib/db-config";
-import { useTableData } from "@/lib/hooks/use-database-query";
+import { useTableData, useTableRelationships } from "@/lib/hooks/use-database-query";
 import { useTablePagination } from "@/lib/hooks/use-table-pagination";
 import { useTableFilters } from "@/lib/hooks/use-table-filters";
 import { TABLE_LIMIT_OPTIONS, DEFAULT_TABLE_LIMIT } from "@/lib/constants/table-constants";
@@ -29,6 +30,15 @@ import {
   TableRow,
   TableCell,
 } from "@/components/ui/table";
+import { Badge } from "@/components/ui/badge";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+  DialogTrigger,
+} from "@/components/ui/dialog";
 
 interface TableDataViewProps {
   databaseName: DatabaseName;
@@ -43,6 +53,18 @@ export function TableDataView({
   tableName,
 }: TableDataViewProps) {
   const [limit, setLimit] = useState(DEFAULT_TABLE_LIMIT);
+  const [includeReferences, setIncludeReferences] = useState(true);
+  const [showRelationshipsDialog, setShowRelationshipsDialog] = useState(false);
+
+  // Fetch relationships
+  const { data: relationshipsData } = useTableRelationships(
+    databaseName,
+    schemaName,
+    tableName,
+    true
+  );
+
+  const relationships = relationshipsData?.data?.relationships || [];
 
   // Fetch initial data to get totalRows (minimal fetch)
   const { data: initialData } = useTableData(
@@ -51,7 +73,8 @@ export function TableDataView({
     tableName,
     1,
     0,
-    true
+    true,
+    includeReferences
   );
 
   const totalRows = initialData?.data?.totalRows || 0;
@@ -72,7 +95,8 @@ export function TableDataView({
     tableName,
     limit,
     pagination.offset,
-    true
+    true,
+    includeReferences
   );
 
   const tableData = data?.data;
@@ -117,20 +141,94 @@ export function TableDataView({
   return (
     <div className="w-full h-full flex flex-col">
       {/* Header */}
-      <div className="flex items-center gap-2 p-4 border-b border-border">
-        <Database className="h-5 w-5 text-primary" />
-        <div>
-          <h2 className="text-lg font-semibold text-foreground">
-            {schemaName}.{tableName}
-          </h2>
-          <p className="text-xs text-muted-foreground">
-            Database: {databaseName}
-            {tableData && (
-              <span className="ml-2">
-                • {tableData.columns.length} columns
-              </span>
-            )}
-          </p>
+      <div className="flex items-center justify-between gap-2 p-4 pt-8 border-b border-border">
+        <div className="flex items-center gap-2">
+          <Database className="h-5 w-5 text-primary" />
+          <div>
+            <h2 className="text-lg font-semibold text-foreground">
+              {schemaName}.{tableName}
+            </h2>
+            <p className="text-xs text-muted-foreground">
+              Database: {databaseName}
+              {tableData && (
+                <span className="ml-2">
+                  • {tableData.columns.length} columns
+                </span>
+              )}
+              {relationships.length > 0 && (
+                <span className="ml-2">
+                  • {relationships.length} relationship{relationships.length > 1 ? 's' : ''}
+                </span>
+              )}
+            </p>
+          </div>
+        </div>
+        <div className="flex items-center gap-2">
+          {relationships.length > 0 && (
+            <Dialog open={showRelationshipsDialog} onOpenChange={setShowRelationshipsDialog}>
+              <DialogTrigger asChild>
+                <Button variant="outline" size="sm" className="gap-2">
+                  <Link2 className="h-4 w-4" />
+                  <span className="hidden sm:inline">Relationships</span>
+                  <Badge variant="secondary" className="ml-1">
+                    {relationships.length}
+                  </Badge>
+                </Button>
+              </DialogTrigger>
+              <DialogContent className="max-w-2xl max-h-[80vh] overflow-y-auto">
+                <DialogHeader>
+                  <DialogTitle>Table Relationships</DialogTitle>
+                  <DialogDescription>
+                    Foreign key relationships for {schemaName}.{tableName}
+                  </DialogDescription>
+                </DialogHeader>
+                <div className="space-y-4">
+                  {relationships.map((rel, index) => (
+                    <div
+                      key={index}
+                      className="p-4 border border-border rounded-lg bg-muted/30"
+                    >
+                      <div className="flex items-start gap-3">
+                        <Link2 className="h-5 w-5 text-primary mt-0.5" />
+                        <div className="flex-1 space-y-2">
+                          <div className="flex items-center gap-2">
+                            <span className="font-semibold text-sm">{rel.FK_NAME}</span>
+                          </div>
+                          <div className="text-sm space-y-1">
+                            <div className="flex items-center gap-2">
+                              <span className="text-muted-foreground">From:</span>
+                              <Badge variant="outline">
+                                {rel.FK_SCHEMA}.{rel.FK_TABLE}.{rel.FK_COLUMN}
+                              </Badge>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className="text-muted-foreground">To:</span>
+                              <Badge variant="outline">
+                                {rel.PK_SCHEMA}.{rel.PK_TABLE}.{rel.PK_COLUMN}
+                              </Badge>
+                            </div>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </DialogContent>
+            </Dialog>
+          )}
+          <Field orientation="horizontal" className="gap-2 items-center">
+            <FieldLabel className="text-xs cursor-pointer" onClick={() => setIncludeReferences(!includeReferences)}>
+              Show References
+            </FieldLabel>
+            <FieldContent>
+              <input
+                type="checkbox"
+                checked={includeReferences}
+                onChange={(e) => setIncludeReferences(e.target.checked)}
+                className="h-4 w-4 rounded border-input"
+              />
+            </FieldContent>
+          </Field>
         </div>
       </div>
 
@@ -192,44 +290,61 @@ export function TableDataView({
             >
               <TableHeader>
                 <TableRow>
-                  {tableData.columns.map((column) => (
-                    <TableHead key={column} className="font-semibold p-2">
-                      <div className="flex flex-col gap-1">
-                        <span>{column}</span>
-                        {showFilters && (
-                          <InputGroup className="h-7">
-                            <InputGroupInput
-                              type="text"
-                              placeholder="Filter..."
-                              value={filters[column] || ""}
-                              onChange={(e) => handleFilterChange(column, e.target.value)}
-                              className="text-xs"
-                            />
-                            {filters[column] && (
-                              <InputGroupAddon align="inline-end">
-                                <InputGroupButton
-                                  variant="ghost"
-                                  size="icon-xs"
-                                  onClick={() => handleClearFilter(column)}
-                                  type="button"
-                                  className="text-destructive hover:text-destructive/80"
-                                >
-                                  <XCircle className="h-3 w-3" />
-                                </InputGroupButton>
-                              </InputGroupAddon>
+                  {tableData.columns
+                    .filter(column => !column.endsWith('_OriginalId')) // Hide _OriginalId columns
+                    .map((column) => {
+                    // Check if this column has a relationship
+                    const hasRelationship = includeReferences && relationships.some(rel => rel.FK_COLUMN === column);
+                    
+                    return (
+                      <TableHead key={column} className="font-semibold p-2">
+                        <div className="flex flex-col gap-1">
+                          <div className="flex items-center gap-1">
+                            <span>{column}</span>
+                            {hasRelationship && (
+                              <Badge variant="secondary" className="text-xs px-1 py-0">
+                                <Link2 className="h-3 w-3 mr-1" />
+                                Ref
+                              </Badge>
                             )}
-                          </InputGroup>
-                        )}
-                      </div>
-                    </TableHead>
-                  ))}
+                          </div>
+                          {showFilters && (
+                            <InputGroup className="h-7">
+                              <InputGroupInput
+                                type="text"
+                                placeholder="Filter..."
+                                value={filters[column] || ""}
+                                onChange={(e) => handleFilterChange(column, e.target.value)}
+                                className="text-xs"
+                              />
+                              {filters[column] && (
+                                <InputGroupAddon align="inline-end">
+                                  <InputGroupButton
+                                    variant="ghost"
+                                    size="icon-xs"
+                                    onClick={() => handleClearFilter(column)}
+                                    type="button"
+                                    className="text-destructive hover:text-destructive/80"
+                                  >
+                                    <XCircle className="h-3 w-3" />
+                                  </InputGroupButton>
+                                </InputGroupAddon>
+                              )}
+                            </InputGroup>
+                          )}
+                        </div>
+                      </TableHead>
+                    );
+                  })}
                 </TableRow>
               </TableHeader>
               <TableBody>
                 {filteredRows.length > 0 ? (
                   filteredRows.map((row, rowIndex) => (
                     <TableRow key={rowIndex}>
-                      {tableData.columns.map((column) => (
+                      {tableData.columns
+                        .filter(column => !column.endsWith('_OriginalId')) // Hide _OriginalId columns
+                        .map((column) => (
                         <TableCell key={column} className="max-w-xs">
                           <TableCellComponent value={row[column]} />
                         </TableCell>
@@ -239,7 +354,7 @@ export function TableDataView({
                 ) : (
                   <TableRow>
                     <TableCell
-                      colSpan={tableData.columns.length}
+                      colSpan={tableData.columns.filter(c => !c.endsWith('_OriginalId')).length}
                       className="text-center py-8 text-muted-foreground"
                     >
                       No rows match the current filters

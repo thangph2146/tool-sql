@@ -5,7 +5,6 @@ import { getEnabledDatabases } from '@/lib/db-config';
 import type { DatabaseName } from '@/lib/db-config';
 import { DatabaseCard } from './database/database-card';
 import { DatabaseHeader } from './database/database-header';
-import { DatabaseInstructions } from './database/database-instructions';
 import { TableComparisonView } from './database/table-comparison-view';
 import { SelectedTablesBanner } from './database/selected-tables-banner';
 
@@ -84,9 +83,6 @@ export function DbConnectionStatus() {
           />
         ))}
       </div>
-
-      {/* Instructions */}
-      <DatabaseInstructions />
 
       {/* Table Comparison Dialog */}
       {comparisonTables.left && comparisonTables.right && (

@@ -147,6 +147,16 @@ export function useFetchTables() {
   });
 }
 
+interface ForeignKeyInfo {
+  FK_NAME: string;
+  FK_SCHEMA: string;
+  FK_TABLE: string;
+  FK_COLUMN: string;
+  PK_SCHEMA: string;
+  PK_TABLE: string;
+  PK_COLUMN: string;
+}
+
 interface TableDataResponse {
   success: boolean;
   message: string;
@@ -160,6 +170,7 @@ interface TableDataResponse {
     hasMore: boolean;
     limit: number;
     offset: number;
+    relationships?: ForeignKeyInfo[];
   };
   error?: string;
 }
@@ -173,21 +184,58 @@ export function useTableData(
   tableName: string | undefined,
   limit: number = 100,
   offset: number = 0,
-  enabled: boolean = true
+  enabled: boolean = true,
+  includeReferences: boolean = false
 ) {
   return useQuery({
-    queryKey: [...databaseQueryKeys.all, 'table-data', databaseName, schemaName, tableName, limit, offset] as const,
+    queryKey: [...databaseQueryKeys.all, 'table-data', databaseName, schemaName, tableName, limit, offset, includeReferences] as const,
     queryFn: async () => {
       if (!databaseName || !schemaName || !tableName) {
         throw new Error('Database, schema, and table are required');
       }
-      const response = await axiosClient.get<TableDataResponse>(
-        `/api/db/table-data?database=${databaseName}&schema=${encodeURIComponent(schemaName)}&table=${encodeURIComponent(tableName)}&limit=${limit}&offset=${offset}`
-      );
+      const url = `/api/db/table-data?database=${databaseName}&schema=${encodeURIComponent(schemaName)}&table=${encodeURIComponent(tableName)}&limit=${limit}&offset=${offset}${includeReferences ? '&includeReferences=true' : ''}`;
+      const response = await axiosClient.get<TableDataResponse>(url);
       return response.data;
     },
     enabled: enabled && !!databaseName && !!schemaName && !!tableName,
     staleTime: 30 * 1000, // Consider data fresh for 30 seconds
+  });
+}
+
+interface TableRelationshipsResponse {
+  success: boolean;
+  message: string;
+  data: {
+    database: DatabaseName;
+    schema: string;
+    table: string;
+    relationships: ForeignKeyInfo[];
+  };
+  error?: string;
+}
+
+/**
+ * Hook to get table relationships
+ */
+export function useTableRelationships(
+  databaseName: DatabaseName | undefined,
+  schemaName: string | undefined,
+  tableName: string | undefined,
+  enabled: boolean = true
+) {
+  return useQuery({
+    queryKey: [...databaseQueryKeys.all, 'table-relationships', databaseName, schemaName, tableName] as const,
+    queryFn: async () => {
+      if (!databaseName || !schemaName || !tableName) {
+        throw new Error('Database, schema, and table are required');
+      }
+      const response = await axiosClient.get<TableRelationshipsResponse>(
+        `/api/db/table-relationships?database=${databaseName}&schema=${encodeURIComponent(schemaName)}&table=${encodeURIComponent(tableName)}`
+      );
+      return response.data;
+    },
+    enabled: enabled && !!databaseName && !!schemaName && !!tableName,
+    staleTime: 60 * 1000, // Consider data fresh for 1 minute
   });
 }
 
