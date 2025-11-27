@@ -19,6 +19,10 @@ import { ScrollArea } from "@radix-ui/react-scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { ForeignKeyInfo } from "@/lib/hooks/use-database-query";
+import {
+  categorizeRelationships,
+  groupRelationshipsByTable,
+} from "@/lib/utils/relationship-utils";
 
 interface TableRelationshipsDialogProps {
   relationships: ForeignKeyInfo[];
@@ -37,56 +41,24 @@ export function TableRelationshipsDialog({
 }: TableRelationshipsDialogProps) {
   const [showDialog, setShowDialog] = useState(false);
 
-  // Phân loại relationships thành outgoing và incoming
-  const { outgoing, incoming } = useMemo(() => {
-    const out: ForeignKeyInfo[] = [];
-    const inc: ForeignKeyInfo[] = [];
+  // Categorize relationships
+  const { outgoing, incoming } = useMemo(
+    () => categorizeRelationships(relationships, schemaName, tableName),
+    [relationships, schemaName, tableName]
+  );
 
-    relationships.forEach((rel) => {
-      const isOutgoing = rel.FK_SCHEMA === schemaName && rel.FK_TABLE === tableName;
-      const isIncoming = rel.PK_SCHEMA === schemaName && rel.PK_TABLE === tableName;
+  // Group relationships by table
+  const groupedOutgoing = useMemo(
+    () => groupRelationshipsByTable(outgoing, true),
+    [outgoing]
+  );
 
-      if (isOutgoing) {
-        out.push(rel);
-      } else if (isIncoming) {
-        inc.push(rel);
-      }
-    });
+  const groupedIncoming = useMemo(
+    () => groupRelationshipsByTable(incoming, false),
+    [incoming]
+  );
 
-    return { outgoing: out, incoming: inc };
-  }, [relationships, schemaName, tableName]);
-
-  // Nhóm outgoing relationships theo PK_TABLE (table đích)
-  const groupedOutgoing = useMemo(() => {
-    return outgoing.reduce(
-      (acc, rel) => {
-        const key = `${rel.PK_SCHEMA}.${rel.PK_TABLE}`;
-        if (!acc[key]) {
-          acc[key] = [];
-        }
-        acc[key].push(rel);
-        return acc;
-      },
-      {} as Record<string, ForeignKeyInfo[]>
-    );
-  }, [outgoing]);
-
-  // Nhóm incoming relationships theo FK_TABLE (table nguồn)
-  const groupedIncoming = useMemo(() => {
-    return incoming.reduce(
-      (acc, rel) => {
-        const key = `${rel.FK_SCHEMA}.${rel.FK_TABLE}`;
-        if (!acc[key]) {
-          acc[key] = [];
-        }
-        acc[key].push(rel);
-        return acc;
-      },
-      {} as Record<string, ForeignKeyInfo[]>
-    );
-  }, [incoming]);
-
-  // Tính toán initial expanded keys
+  // Calculate initial expanded keys
   const initialExpandedKeys = useMemo(() => {
     const allKeys = new Set<string>();
     Object.keys(groupedOutgoing).forEach((key) => allKeys.add(key));

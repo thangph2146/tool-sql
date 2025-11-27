@@ -3,8 +3,12 @@ import { getTableData, getTableDataWithReferences } from '@/lib/db-manager';
 import { getDatabaseConfig } from '@/lib/db-config';
 import type { DatabaseName } from '@/lib/db-config';
 import { logger } from '@/lib/logger';
+import { FLOW_NAMES } from '@/lib/constants/flow-constants';
 import { filterTableRows, FilterRelationships, normalizeVietnameseText } from '@/lib/utils/table-filter-utils';
 import { HIDDEN_COLUMNS, HIDDEN_COLUMN_PATTERNS } from '@/lib/constants/table-constants';
+import { errorResponse, successResponse, validateRequiredParams } from '@/lib/utils/api-response';
+
+const VALID_DATABASES: readonly DatabaseName[] = ['database_1', 'database_2'] as const;
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -29,38 +33,31 @@ export async function GET(request: NextRequest) {
         );
       }
     } catch (parseError) {
-      return NextResponse.json(
-        {
-          success: false,
-          message: 'Invalid filters parameter. Must be valid JSON object.',
-          error: parseError instanceof Error ? parseError.message : 'Invalid filters',
-        },
-        { status: 400 }
+      return errorResponse(
+        'Invalid filters parameter. Must be valid JSON object.',
+        parseError instanceof Error ? parseError.message : 'Invalid filters'
       );
     }
   }
 
   // Validate required parameters
-  if (!databaseName || !schemaName || !tableName) {
-    return NextResponse.json(
-      {
-        success: false,
-        message: 'Missing required parameters: database, schema, and table are required',
-        error: 'Missing parameters',
-      },
-      { status: 400 }
+  const validation = validateRequiredParams(
+    { database: databaseName, schema: schemaName, table: tableName },
+    ['database', 'schema', 'table']
+  );
+
+  if (!validation.valid) {
+    return errorResponse(
+      `Missing required parameters: ${validation.missing.join(', ')}`,
+      'Missing parameters'
     );
   }
 
   // Validate database name
-  if (databaseName !== 'database_1' && databaseName !== 'database_2') {
-    return NextResponse.json(
-      {
-        success: false,
-        message: `Invalid database name: ${databaseName}. Must be 'database_1' or 'database_2'`,
-        error: 'Invalid database name',
-      },
-      { status: 400 }
+  if (!VALID_DATABASES.includes(databaseName)) {
+    return errorResponse(
+      `Invalid database name: ${databaseName}. Must be one of: ${VALID_DATABASES.join(', ')}`,
+      'Invalid database name'
     );
   }
 
@@ -87,7 +84,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const flowName = `API_GET_TABLE_DATA_${databaseName.toUpperCase()}`;
+  const flowName = FLOW_NAMES.API_GET_TABLE_DATA(databaseName);
   const flowId = logger.startFlow(flowName, {
     database: databaseName,
     schema: schemaName,
@@ -189,16 +186,16 @@ export async function GET(request: NextRequest) {
       const tableData = includeReferences
         ? await getTableDataWithReferences(
             databaseName,
-            schemaName,
-            tableName,
+            schemaName!,
+            tableName!,
             limit,
             offset,
             flowId
           )
         : await getTableData(
             databaseName,
-            schemaName,
-            tableName,
+            schemaName!,
+            tableName!,
             limit,
             offset,
             flowId
@@ -289,16 +286,16 @@ export async function GET(request: NextRequest) {
       const chunkData = includeReferences
         ? await getTableDataWithReferences(
             databaseName,
-            schemaName,
-            tableName,
+            schemaName!,
+            tableName!,
             chunkLimit,
             chunkOffset,
             flowId
           )
         : await getTableData(
             databaseName,
-            schemaName,
-            tableName,
+            schemaName!,
+            tableName!,
             chunkLimit,
             chunkOffset,
             flowId
@@ -375,36 +372,36 @@ export async function GET(request: NextRequest) {
       chunksProcessed: chunkIndex,
     });
 
-    return NextResponse.json({
-      success: true,
-      message: `Successfully fetched data from ${schemaName}.${tableName}`,
-      data: {
+    const summary = {
+      totalRows,
+      filteredRowCount,
+      hasMore: filteredHasMore,
+      limit,
+      offset,
+    };
+
+    flowLog.success('Table data fetched successfully', summary);
+    flowLog.end(true, summary);
+
+    return successResponse(
+      `Successfully fetched data from ${schemaName}.${tableName}`,
+      {
         database: databaseName,
         schema: schemaName,
         table: tableName,
         columns: visibleColumns,
         rows: sortedRows,
-        totalRows,
-        hasMore: filteredHasMore,
-        limit,
-        offset,
-        filteredRowCount,
+        ...summary,
         filtersApplied: filters,
         ...(includeReferences && relationships.length > 0 ? { relationships } : {}),
-      },
-    });
-  } catch (error) {
-    flowLog.error('Unexpected error in API get table data', error);
-    flowLog.end(false, { error: error instanceof Error ? error.message : 'Unknown error' });
-
-    return NextResponse.json(
-      {
-        success: false,
-        message: 'Failed to fetch table data',
-        error: error instanceof Error ? error.message : 'Unknown error',
-      },
-      { status: 500 }
+      }
     );
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    flowLog.error('Unexpected error in API get table data', error);
+    flowLog.end(false, { error: errorMessage });
+
+    return errorResponse('Failed to fetch table data', errorMessage, 500);
   }
 }
 

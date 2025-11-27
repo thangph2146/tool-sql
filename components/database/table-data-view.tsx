@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useEffect, useRef } from "react";
+import { useState, useCallback, useMemo, useEffect } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -46,7 +46,9 @@ import {
   normalizeColumnName,
   filterHiddenColumns,
 } from "@/lib/utils/table-column-utils";
-import { logger } from "@/lib/logger";
+import { sortRelationships } from "@/lib/utils/relationship-utils";
+import { useFlowLoggerWithKey } from "@/lib/hooks/use-flow-logger";
+import { FLOW_NAMES } from "@/lib/constants/flow-constants";
 import { ReferenceColumnFilter } from "@/components/database/reference-column-filter";
 import { TableRelationshipsDialog } from "@/components/database/table-relationships-dialog";
 
@@ -67,78 +69,30 @@ export function TableDataView({
   const [limit, setLimit] = useState(DEFAULT_TABLE_LIMIT);
   const [includeReferences, setIncludeReferences] = useState(true);
 
-  // Flow logging for TableDataView
-  const flowLogRef = useRef<ReturnType<typeof logger.createFlowLogger> | null>(
-    null
+  // Flow logging with key-based lifecycle
+  const tableKey = `${databaseName}_${schemaName}_${tableName}`;
+  const { flowLog } = useFlowLoggerWithKey(
+    tableKey,
+    () => FLOW_NAMES.TABLE_DATA_VIEW(databaseName, schemaName, tableName),
+    () => ({
+      database: databaseName,
+      schema: schemaName,
+      table: tableName,
+      includeReferences,
+      limit,
+    })
   );
-  const currentTableKey = useRef<string>("");
 
-  // Initialize flow when component mounts or table changes
+  // Log when view opens
   useEffect(() => {
-    const tableKey = `${databaseName}_${schemaName}_${tableName}`;
-
-    // End previous flow if table changed
-    if (
-      currentTableKey.current &&
-      currentTableKey.current !== tableKey &&
-      flowLogRef.current
-    ) {
-      flowLogRef.current.end(true, {
-        database: databaseName,
-        schema: schemaName,
-        table: tableName,
-      });
-      flowLogRef.current = null;
-    }
-
-    // Create new flow if not exists or table changed
-    if (!flowLogRef.current || currentTableKey.current !== tableKey) {
-      const flowName = `TABLE_DATA_VIEW_${databaseName.toUpperCase()}_${schemaName}_${tableName}`;
-      const flowId = logger.startFlow(flowName, {
-        database: databaseName,
-        schema: schemaName,
-        table: tableName,
-        includeReferences,
-        limit,
-      });
-      flowLogRef.current = logger.createFlowLogger(flowId);
-      currentTableKey.current = tableKey;
-
-      flowLogRef.current.info("TableDataView opened", {
+    if (flowLog) {
+      flowLog.info('TableDataView opened', {
         database: databaseName,
         schema: schemaName,
         table: tableName,
       });
     }
-
-    // Cleanup: end flow when component unmounts or table changes
-    // Note: In React Strict Mode (development), cleanup runs twice, but we check currentTableKey
-    // to ensure we only end flow when table actually changes or component really unmounts
-    return () => {
-      // Only end flow if this is still the current table
-      // In Strict Mode, if component remounts immediately, currentTableKey will be set again
-      // so this check will fail and flow won't be ended prematurely
-      if (flowLogRef.current && currentTableKey.current === tableKey) {
-        // Use a flag to prevent ending flow if component remounts (Strict Mode)
-        const shouldEndFlow = currentTableKey.current === tableKey;
-
-        if (shouldEndFlow) {
-          flowLogRef.current.end(true, {
-            database: databaseName,
-            schema: schemaName,
-            table: tableName,
-            reason: "Component unmounted or table changed",
-          });
-          flowLogRef.current = null;
-          // Only clear currentTableKey if it's still the same (real unmount)
-          if (currentTableKey.current === tableKey) {
-            currentTableKey.current = "";
-          }
-        }
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [databaseName, schemaName, tableName]); // Only recreate flow when table changes, not when includeReferences/limit change
+  }, [flowLog, databaseName, schemaName, tableName]);
 
   // Fetch relationships
   const { data: relationshipsData } = useTableRelationships(
@@ -150,14 +104,7 @@ export function TableDataView({
 
   const relationships = useMemo(() => {
     const rels = relationshipsData?.data?.relationships || [];
-    // Sắp xếp: nhóm theo PK_TABLE trước, sau đó theo FK_COLUMN
-    return [...rels].sort((a, b) => {
-      const pkTableCompare = a.PK_TABLE.localeCompare(b.PK_TABLE, 'vi');
-      if (pkTableCompare !== 0) {
-        return pkTableCompare;
-      }
-      return a.FK_COLUMN.localeCompare(b.FK_COLUMN, 'vi');
-    });
+    return sortRelationships(rels);
   }, [relationshipsData?.data?.relationships]);
 
   // Fetch initial data to get totalRows (minimal fetch)
@@ -213,7 +160,7 @@ export function TableDataView({
 
   // Log when table data is loaded
   useEffect(() => {
-    if (tableData && flowLogRef.current) {
+    if (tableData && flowLog) {
       // Log detailed table data information
       const columnNames = tableData.columns.map((col) => String(col));
       const sampleRows = tableData.rows.slice(0, 3).map((row) => {
@@ -233,7 +180,7 @@ export function TableDataView({
         return sample;
       });
 
-      flowLogRef.current.success("Table data loaded", {
+      flowLog.success("Table data loaded", {
         rowsLoaded: tableData.rows.length,
         totalRows: tableData.totalRows,
         columns: {
@@ -250,7 +197,7 @@ export function TableDataView({
 
       // Log additional info about data
       if (tableData.rows.length > 0) {
-        flowLogRef.current.info("Table data details", {
+        flowLog.info("Table data details", {
           firstRowKeys: Object.keys(tableData.rows[0]),
           dataTypes: columnNames.slice(0, 10).map((col) => {
             const firstValue = tableData.rows[0]?.[col];
@@ -277,14 +224,15 @@ export function TableDataView({
     limit,
     includeReferences,
     relationships.length,
+    flowLog,
   ]);
 
   // Log errors
   useEffect(() => {
-    if (error && flowLogRef.current) {
-      flowLogRef.current.error("Error loading table data", error);
+    if (error && flowLog) {
+      flowLog.error("Error loading table data", error);
     }
-  }, [error]);
+  }, [error, flowLog]);
 
   // Create a debounced filter key for forcing re-render when debounced filters change
   const debouncedFilterKey = useMemo(() => {
@@ -298,11 +246,11 @@ export function TableDataView({
 
   // Log when filtered rows change (from API response)
   useEffect(() => {
-    if (flowLogRef.current && tableData) {
+    if (flowLog && tableData) {
       const activeFiltersList = Object.entries(debouncedFilters)
         .filter(([, v]) => v?.trim() !== "")
         .map(([col, val]) => ({ column: col, value: val }));
-      flowLogRef.current.debug("Filtered rows updated", {
+      flowLog.debug("Filtered rows updated", {
         filteredCount: tableData.rows.length,
         totalRows: tableData.totalRows,
         filteredRowCount: tableData.filteredRowCount ?? tableData.rows.length,
@@ -320,12 +268,13 @@ export function TableDataView({
     filters,
     hasActiveFilters,
     activeFilterCount,
+    flowLog,
   ]);
 
   // Enhanced filter handlers that reset pagination - memoized with useCallback
   const handleFilterChange = useCallback(
     (column: string, value: string) => {
-      logger.debug(
+      flowLog?.debug(
         `Table data filter changed: ${schemaName}.${tableName}`,
         {
           database: databaseName,
@@ -334,25 +283,23 @@ export function TableDataView({
           column,
           value,
           resetPage: true,
-        },
-        "TABLE_DATA_FILTER"
+        }
       );
       baseHandleFilterChange(column, value);
       pagination.setPage(0);
     },
-    [baseHandleFilterChange, pagination, databaseName, schemaName, tableName]
+    [baseHandleFilterChange, pagination, databaseName, schemaName, tableName, flowLog]
   );
 
   const handleClearFilters = useCallback(() => {
-    logger.info(
+    flowLog?.info(
       `Cleared all filters for table: ${schemaName}.${tableName}`,
       {
         database: databaseName,
         schema: schemaName,
         table: tableName,
         activeFilterCount,
-      },
-      "TABLE_DATA_FILTER"
+      }
     );
     baseHandleClearFilters();
     pagination.setPage(0);
@@ -363,24 +310,24 @@ export function TableDataView({
     schemaName,
     tableName,
     activeFilterCount,
+    flowLog,
   ]);
 
   const handleClearFilter = useCallback(
     (column: string) => {
-      logger.debug(
+      flowLog?.debug(
         `Cleared filter for column: ${column} in table: ${schemaName}.${tableName}`,
         {
           database: databaseName,
           schema: schemaName,
           table: tableName,
           column,
-        },
-        "TABLE_DATA_FILTER"
+        }
       );
       baseHandleClearFilter(column);
       pagination.setPage(0);
     },
-    [baseHandleClearFilter, pagination, databaseName, schemaName, tableName]
+    [baseHandleClearFilter, pagination, databaseName, schemaName, tableName, flowLog]
   );
 
   return (
@@ -440,8 +387,8 @@ export function TableDataView({
                 checked={includeReferences}
                 onChange={(e) => {
                   const newValue = e.target.checked;
-                  if (flowLogRef.current) {
-                    flowLogRef.current.info("Include references toggled", {
+                  if (flowLog) {
+                    flowLog.info("Include references toggled", {
                       includeReferences: newValue,
                       previousValue: includeReferences,
                     });
@@ -485,7 +432,7 @@ export function TableDataView({
                 size="sm"
                 onClick={() => {
                   const newShowFilters = !showFilters;
-                  logger.debug(
+                  flowLog?.debug(
                     `${
                       newShowFilters ? "Showing" : "Hiding"
                     } filters for table: ${schemaName}.${tableName}`,
@@ -495,8 +442,7 @@ export function TableDataView({
                       table: tableName,
                       showFilters: newShowFilters,
                       activeFilterCount,
-                    },
-                    "TABLE_DATA_FILTER"
+                    }
                   );
                   setShowFilters(newShowFilters);
                 }}

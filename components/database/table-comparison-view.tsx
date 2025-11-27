@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useMemo, useEffect, useRef } from "react";
+import { useState, useMemo, useEffect } from "react";
 import {
   Loader2,
   Database,
@@ -27,7 +27,11 @@ import { cn } from "@/lib/utils";
 import { ComparisonTable } from "@/components/database/comparison-table";
 import { DEFAULT_TABLE_LIMIT } from "@/lib/constants/table-constants";
 import { categorizeColumns, getColumnsToDisplay, normalizeColumnName } from "@/lib/utils/table-column-utils";
-import { logger } from "@/lib/logger";
+import { sortRelationships } from "@/lib/utils/relationship-utils";
+import { useFlowLoggerWithKey } from "@/lib/hooks/use-flow-logger";
+import { FLOW_NAMES } from "@/lib/constants/flow-constants";
+import { useSyncedColumns } from "@/lib/hooks/use-synced-columns";
+import type { ForeignKeyInfo } from "@/lib/hooks/use-database-query";
 
 interface TableComparisonViewProps {
   leftTable: {
@@ -63,81 +67,59 @@ export function TableComparisonView({
   const [showRightOnlyRelationshipsDialog, setShowRightOnlyRelationshipsDialog] = useState(false);
   const offset = page * limit;
 
-  // Flow logging for TableComparisonView
-  const flowLogRef = useRef<ReturnType<typeof logger.createFlowLogger> | null>(null);
-  const currentComparisonKey = useRef<string>('');
+  // Flow logging with key-based lifecycle (only when open)
+  const comparisonKey = open
+    ? `${leftTable.databaseName}_${leftTable.schemaName}_${leftTable.tableName}_VS_${rightTable.databaseName}_${rightTable.schemaName}_${rightTable.tableName}`
+    : '';
+  
+  const { flowLog, end: endFlow } = useFlowLoggerWithKey(
+    comparisonKey,
+    () => FLOW_NAMES.TABLE_COMPARISON(
+      leftTable.databaseName,
+      leftTable.schemaName,
+      leftTable.tableName,
+      rightTable.databaseName,
+      rightTable.schemaName,
+      rightTable.tableName
+    ),
+    () => ({
+      leftTable: {
+        database: leftTable.databaseName,
+        schema: leftTable.schemaName,
+        table: leftTable.tableName,
+      },
+      rightTable: {
+        database: rightTable.databaseName,
+        schema: rightTable.schemaName,
+        table: rightTable.tableName,
+      },
+      includeReferences,
+      limit,
+      page,
+    }),
+    open
+  );
 
   // Handle flow when open state changes
   useEffect(() => {
-    if (!open && flowLogRef.current) {
-      // If dialog/view is closed, end flow
-      flowLogRef.current.end(true, {
+    if (!open && flowLog) {
+      endFlow(true, {
         leftTable: `${leftTable.schemaName}.${leftTable.tableName}`,
         rightTable: `${rightTable.schemaName}.${rightTable.tableName}`,
         reason: 'Dialog/view closed',
       });
-      flowLogRef.current = null;
-      currentComparisonKey.current = '';
     }
-  }, [open, leftTable.schemaName, leftTable.tableName, rightTable.schemaName, rightTable.tableName]);
+  }, [open, flowLog, endFlow, leftTable.schemaName, leftTable.tableName, rightTable.schemaName, rightTable.tableName]);
 
-  // Initialize flow when component mounts or comparison changes
+  // Log when view opens
   useEffect(() => {
-    if (!open) return;
-
-    const comparisonKey = `${leftTable.databaseName}_${leftTable.schemaName}_${leftTable.tableName}_VS_${rightTable.databaseName}_${rightTable.schemaName}_${rightTable.tableName}`;
-
-    // End previous flow if comparison changed
-    if (currentComparisonKey.current && currentComparisonKey.current !== comparisonKey && flowLogRef.current) {
-      flowLogRef.current.end(true, {
-        leftTable: `${leftTable.schemaName}.${leftTable.tableName}`,
-        rightTable: `${rightTable.schemaName}.${rightTable.tableName}`,
-        reason: 'Comparison changed',
-      });
-      flowLogRef.current = null;
-    }
-
-    // Create new flow if not exists or comparison changed
-    if (!flowLogRef.current || currentComparisonKey.current !== comparisonKey) {
-      const flowName = `TABLE_COMPARISON_${leftTable.databaseName.toUpperCase()}_${leftTable.schemaName}_${leftTable.tableName}_VS_${rightTable.databaseName.toUpperCase()}_${rightTable.schemaName}_${rightTable.tableName}`;
-      const flowId = logger.startFlow(flowName, {
-        leftTable: {
-          database: leftTable.databaseName,
-          schema: leftTable.schemaName,
-          table: leftTable.tableName,
-        },
-        rightTable: {
-          database: rightTable.databaseName,
-          schema: rightTable.schemaName,
-          table: rightTable.tableName,
-        },
-        includeReferences,
-        limit,
-        page,
-      });
-      flowLogRef.current = logger.createFlowLogger(flowId);
-      currentComparisonKey.current = comparisonKey;
-
-      flowLogRef.current.info('TableComparisonView opened', {
+    if (flowLog && open) {
+      flowLog.info('TableComparisonView opened', {
         leftTable: `${leftTable.schemaName}.${leftTable.tableName} (${leftTable.databaseName})`,
         rightTable: `${rightTable.schemaName}.${rightTable.tableName} (${rightTable.databaseName})`,
       });
     }
-
-    // Cleanup: end flow only when comparison actually changes (not on remount)
-    return () => {
-      // Only end if comparison key changed (not just remount)
-      if (flowLogRef.current && currentComparisonKey.current && currentComparisonKey.current !== comparisonKey) {
-        flowLogRef.current.end(true, {
-          leftTable: `${leftTable.schemaName}.${leftTable.tableName}`,
-          rightTable: `${rightTable.schemaName}.${rightTable.tableName}`,
-          reason: 'Comparison changed',
-        });
-        flowLogRef.current = null;
-      }
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leftTable.databaseName, leftTable.schemaName, leftTable.tableName, rightTable.databaseName, rightTable.schemaName, rightTable.tableName]); // Only recreate flow when comparison changes, not when includeReferences/limit/page/open change
+  }, [flowLog, open, leftTable, rightTable]);
 
   // Fetch relationships for both tables
   const leftRelationshipsData = useTableRelationships(
@@ -155,8 +137,6 @@ export function TableComparisonView({
   );
 
   const leftRelationships = useMemo(() => {
-    // useTableRelationships returns TableRelationshipsResponse: { success, message, data: { database, schema, table, relationships: [...] } }
-    // So leftRelationshipsData?.data is TableRelationshipsResponse, and we need to access data.data.relationships
     const rels = ((leftRelationshipsData?.data as { data?: { relationships?: unknown[] } })?.data?.relationships || []) as Array<{
       FK_NAME: string;
       FK_SCHEMA: string;
@@ -166,34 +146,23 @@ export function TableComparisonView({
       PK_TABLE: string;
       PK_COLUMN: string;
     }>;
-    // Sắp xếp: nhóm theo PK_TABLE trước, sau đó theo FK_COLUMN (giống table-data-view.tsx)
-    const sorted = [...rels].sort((a, b) => {
-      const pkTableCompare = a.PK_TABLE.localeCompare(b.PK_TABLE, 'vi');
-      if (pkTableCompare !== 0) {
-        return pkTableCompare;
-      }
-      return a.FK_COLUMN.localeCompare(b.FK_COLUMN, 'vi');
-    });
     
-    // Debug logging
-    if (flowLogRef.current) {
-      flowLogRef.current.debug('Left relationships processed', {
+    const sorted = sortRelationships(rels);
+    
+    if (flowLog) {
+      flowLog.debug('Left relationships processed', {
         rawCount: rels.length,
         sortedCount: sorted.length,
         isLoading: leftRelationshipsData?.isLoading,
         hasError: !!leftRelationshipsData?.error,
         hasData: !!leftRelationshipsData?.data,
-        dataStructure: leftRelationshipsData?.data ? Object.keys(leftRelationshipsData.data) : [],
-        relationshipsType: Array.isArray(rels) ? 'array' : typeof rels,
       });
     }
     
     return sorted;
-  }, [leftRelationshipsData?.data, leftRelationshipsData?.isLoading, leftRelationshipsData?.error]);
+  }, [leftRelationshipsData?.data, leftRelationshipsData?.isLoading, leftRelationshipsData?.error, flowLog]);
 
   const rightRelationships = useMemo(() => {
-    // useTableRelationships returns TableRelationshipsResponse: { success, message, data: { database, schema, table, relationships: [...] } }
-    // So rightRelationshipsData?.data is TableRelationshipsResponse, and we need to access data.data.relationships
     const rels = ((rightRelationshipsData?.data as { data?: { relationships?: unknown[] } })?.data?.relationships || []) as Array<{
       FK_NAME: string;
       FK_SCHEMA: string;
@@ -203,30 +172,21 @@ export function TableComparisonView({
       PK_TABLE: string;
       PK_COLUMN: string;
     }>;
-    // Sắp xếp: nhóm theo PK_TABLE trước, sau đó theo FK_COLUMN (giống table-data-view.tsx)
-    const sorted = [...rels].sort((a, b) => {
-      const pkTableCompare = a.PK_TABLE.localeCompare(b.PK_TABLE, 'vi');
-      if (pkTableCompare !== 0) {
-        return pkTableCompare;
-      }
-      return a.FK_COLUMN.localeCompare(b.FK_COLUMN, 'vi');
-    });
     
-    // Debug logging
-    if (flowLogRef.current) {
-      flowLogRef.current.debug('Right relationships processed', {
+    const sorted = sortRelationships(rels);
+    
+    if (flowLog) {
+      flowLog.debug('Right relationships processed', {
         rawCount: rels.length,
         sortedCount: sorted.length,
         isLoading: rightRelationshipsData?.isLoading,
         hasError: !!rightRelationshipsData?.error,
         hasData: !!rightRelationshipsData?.data,
-        dataStructure: rightRelationshipsData?.data ? Object.keys(rightRelationshipsData.data) : [],
-        relationshipsType: Array.isArray(rels) ? 'array' : typeof rels,
       });
     }
     
     return sorted;
-  }, [rightRelationshipsData?.data, rightRelationshipsData?.isLoading, rightRelationshipsData?.error]);
+  }, [rightRelationshipsData?.data, rightRelationshipsData?.isLoading, rightRelationshipsData?.error, flowLog]);
 
   // Filter state hooks (debounced values used to request filtered data)
   const leftTableFilters = useTableFilters();
@@ -260,8 +220,8 @@ export function TableComparisonView({
 
   // Log when table data is loaded
   useEffect(() => {
-    if (leftTableData && rightTableData && flowLogRef.current) {
-      flowLogRef.current.success('Comparison data loaded', {
+    if (leftTableData && rightTableData && flowLog) {
+      flowLog.success('Comparison data loaded', {
         leftTable: {
           rowsLoaded: leftTableData.rows.length,
           totalRows: leftTableData.totalRows,
@@ -277,24 +237,24 @@ export function TableComparisonView({
         includeReferences,
       });
     }
-  }, [leftTableData, rightTableData, offset, limit, includeReferences]);
+  }, [leftTableData, rightTableData, offset, limit, includeReferences, flowLog]);
 
   // Log errors and loading states
   useEffect(() => {
-    if (leftData.error && flowLogRef.current) {
-      flowLogRef.current.error('Error loading left table data', leftData.error);
+    if (leftData.error && flowLog) {
+      flowLog.error('Error loading left table data', leftData.error);
     }
-    if (rightData.error && flowLogRef.current) {
-      flowLogRef.current.error('Error loading right table data', rightData.error);
+    if (rightData.error && flowLog) {
+      flowLog.error('Error loading right table data', rightData.error);
     }
-    if (leftRelationshipsData?.error && flowLogRef.current) {
-      flowLogRef.current.error('Error loading left relationships', leftRelationshipsData.error);
+    if (leftRelationshipsData?.error && flowLog) {
+      flowLog.error('Error loading left relationships', leftRelationshipsData.error);
     }
-    if (rightRelationshipsData?.error && flowLogRef.current) {
-      flowLogRef.current.error('Error loading right relationships', rightRelationshipsData.error);
+    if (rightRelationshipsData?.error && flowLog) {
+      flowLog.error('Error loading right relationships', rightRelationshipsData.error);
     }
-    if (flowLogRef.current) {
-      flowLogRef.current.debug('Data loading states', {
+    if (flowLog) {
+      flowLog.debug('Data loading states', {
         leftLoading: leftData.isLoading,
         rightLoading: rightData.isLoading,
         leftRelationshipsLoading: leftRelationshipsData?.isLoading,
@@ -310,7 +270,7 @@ export function TableComparisonView({
         open,
       });
     }
-  }, [leftData.error, rightData.error, leftData.isLoading, rightData.isLoading, leftTableData, rightTableData, open, leftRelationshipsData?.error, leftRelationshipsData?.isLoading, rightRelationshipsData?.error, rightRelationshipsData?.isLoading, leftRelationships.length, rightRelationships.length]);
+  }, [leftData.error, rightData.error, leftData.isLoading, rightData.isLoading, leftTableData, rightTableData, open, leftRelationshipsData?.error, leftRelationshipsData?.isLoading, rightRelationshipsData?.error, rightRelationshipsData?.isLoading, leftRelationships.length, rightRelationships.length, flowLog]);
 
   // Get all unique columns from both tables
   const allColumns = useMemo(() => {
@@ -326,32 +286,10 @@ export function TableComparisonView({
       return { leftOnly: [], rightOnly: [], both: [] };
     }
     return categorizeColumns(leftTableData.columns, rightTableData.columns);
-  }, [leftTableData?.columns, rightTableData?.columns]);
+  }, [leftTableData, rightTableData]);
 
-  // Initialize selected columns (select all by default when columns change)
-  const [selectedColumns, setSelectedColumns] = useState<Set<string>>(() => {
-    // Lazy initialization - will be set in useEffect
-    return new Set();
-  });
-
-  // Update selected columns when allColumns changes (select all by default)
-  useEffect(() => {
-    if (allColumns.length > 0) {
-      setSelectedColumns((prev) => {
-        // Update if empty or if allColumns has changed significantly
-        // Check if current selectedColumns matches allColumns
-        const prevArray = Array.from(prev).sort();
-        const allColumnsSorted = [...allColumns].sort();
-        const isMatching = prevArray.length === allColumnsSorted.length && 
-          prevArray.every((val, idx) => val === allColumnsSorted[idx]);
-        
-        if (prev.size === 0 || !isMatching) {
-          return new Set(allColumns);
-        }
-        return prev;
-      });
-    }
-  }, [allColumns]); // Depend on allColumns array, not just length
+  // Manage selected columns with automatic sync from allColumns
+  const [selectedColumns, setSelectedColumns] = useSyncedColumns(allColumns);
 
   // Get columns to compare (only selected ones)
   const columnsToCompare = useMemo(() => {
@@ -361,24 +299,22 @@ export function TableComparisonView({
   // Get columns to display using utility function
   const leftColumnsToDisplay = useMemo(() => {
     if (!leftTableData?.columns) return [];
-    // If selectedColumns is empty, show all columns from left table
     if (selectedColumns.size === 0) {
       return leftTableData.columns.map(c => String(c));
     }
     return getColumnsToDisplay(leftTableData.columns, selectedColumns);
-  }, [selectedColumns, leftTableData?.columns]);
+  }, [selectedColumns, leftTableData]);
 
   const rightColumnsToDisplay = useMemo(() => {
     if (!rightTableData?.columns) return [];
-    // If selectedColumns is empty, show all columns from right table
     if (selectedColumns.size === 0) {
       return rightTableData.columns.map(c => String(c));
     }
     return getColumnsToDisplay(rightTableData.columns, selectedColumns);
-  }, [selectedColumns, rightTableData?.columns]);
+  }, [selectedColumns, rightTableData]);
 
   // Compare rows using optimized hook
-  const comparisonResult = useTableComparison({
+  const comparisonResult = useTableComparison({ 
     leftRows: leftTableData?.rows || [],
     rightRows: rightTableData?.rows || [],
     columnsToCompare,
@@ -390,8 +326,8 @@ export function TableComparisonView({
   
   // Debug: Log render conditions
   useEffect(() => {
-    if (flowLogRef.current) {
-      flowLogRef.current.debug('Render conditions', {
+    if (flowLog) {
+      flowLog.debug('Render conditions', {
         isLoading,
         hasError,
         leftTableDataExists: !!leftTableData,
@@ -403,7 +339,7 @@ export function TableComparisonView({
         shouldRenderTables: !isLoading && !hasError && !!leftTableData && !!rightTableData,
       });
     }
-  }, [isLoading, hasError, leftTableData, rightTableData]);
+  }, [isLoading, hasError, leftTableData, rightTableData, flowLog]);
   
   // Memoize active filter counts
   const leftActiveFilterCount = leftTableFilters.activeFilterCount;
@@ -419,7 +355,7 @@ export function TableComparisonView({
   const leftOnlyRelationships = useMemo(() => {
     if (columnCategories.leftOnly.length === 0) return [];
     const leftOnlyNormalized = new Set(columnCategories.leftOnly.map(normalizeColumnName));
-    return leftRelationships.filter(rel => 
+    return leftRelationships.filter((rel: ForeignKeyInfo) => 
       leftOnlyNormalized.has(normalizeColumnName(rel.FK_COLUMN))
     );
   }, [leftRelationships, columnCategories.leftOnly]);
@@ -428,7 +364,7 @@ export function TableComparisonView({
   const rightOnlyRelationships = useMemo(() => {
     if (columnCategories.rightOnly.length === 0) return [];
     const rightOnlyNormalized = new Set(columnCategories.rightOnly.map(normalizeColumnName));
-    return rightRelationships.filter(rel => 
+    return rightRelationships.filter((rel: ForeignKeyInfo) => 
       rightOnlyNormalized.has(normalizeColumnName(rel.FK_COLUMN))
     );
   }, [rightRelationships, columnCategories.rightOnly]);
@@ -621,7 +557,7 @@ export function TableComparisonView({
                                 </DialogHeader>
                                 <ScrollArea className="max-h-[60vh] overflow-y-auto">
                                   <div className="space-y-3">
-                                    {leftOnlyRelationships.map((rel, index) => (
+                                    {leftOnlyRelationships.map((rel: ForeignKeyInfo, index: number) => (
                                       <div
                                         key={index}
                                         className="p-3 border border-border rounded-lg bg-muted/30"
@@ -727,7 +663,7 @@ export function TableComparisonView({
                                 </DialogHeader>
                                 <ScrollArea className="max-h-[60vh] overflow-y-auto">
                                   <div className="space-y-3">
-                                    {rightOnlyRelationships.map((rel, index) => (
+                                    {rightOnlyRelationships.map((rel: ForeignKeyInfo, index: number) => (
                                       <div
                                         key={index}
                                         className="p-3 border border-border rounded-lg bg-muted/30"
@@ -868,8 +804,8 @@ export function TableComparisonView({
 
   // Debug: Log dialog rendering
   useEffect(() => {
-    if (flowLogRef.current) {
-      flowLogRef.current.debug('Dialog rendering state', {
+    if (flowLog) {
+      flowLog.debug('Dialog rendering state', {
         asDialog,
         open,
         isLoading,
@@ -879,7 +815,7 @@ export function TableComparisonView({
         shouldRenderContent: !isLoading && !hasError && !!leftTableData && !!rightTableData,
       });
     }
-  }, [asDialog, open, isLoading, hasError, leftTableData, rightTableData]);
+  }, [asDialog, open, isLoading, hasError, leftTableData, rightTableData, flowLog]);
 
   if (asDialog) {
     return (

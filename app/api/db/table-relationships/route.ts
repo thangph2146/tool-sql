@@ -1,8 +1,13 @@
-import { NextRequest, NextResponse } from 'next/server';
+import { NextRequest } from 'next/server';
 import { getTableForeignKeys, getTableReferencedBy } from '@/lib/db-manager';
 import { getDatabaseConfig } from '@/lib/db-config';
 import type { DatabaseName } from '@/lib/db-config';
 import { logger } from '@/lib/logger';
+import { FLOW_NAMES } from '@/lib/constants/flow-constants';
+import { sortRelationships } from '@/lib/utils/relationship-utils';
+import { errorResponse, successResponse, validateRequiredParams } from '@/lib/utils/api-response';
+
+const VALID_DATABASES: DatabaseName[] = ['database_1', 'database_2'];
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -11,30 +16,27 @@ export async function GET(request: NextRequest) {
   const tableName = searchParams.get('table');
 
   // Validate required parameters
-  if (!databaseName || !schemaName || !tableName) {
-    return NextResponse.json(
-      {
-        success: false,
-        message: 'Missing required parameters: database, schema, and table are required',
-        error: 'Missing parameters',
-      },
-      { status: 400 }
+  const validation = validateRequiredParams(
+    { database: databaseName, schema: schemaName, table: tableName },
+    ['database', 'schema', 'table']
+  );
+
+  if (!validation.valid) {
+    return errorResponse(
+      `Missing required parameters: ${validation.missing.join(', ')}`,
+      'Missing parameters'
     );
   }
 
   // Validate database name
-  if (databaseName !== 'database_1' && databaseName !== 'database_2') {
-    return NextResponse.json(
-      {
-        success: false,
-        message: `Invalid database name: ${databaseName}. Must be 'database_1' or 'database_2'`,
-        error: 'Invalid database name',
-      },
-      { status: 400 }
+  if (!VALID_DATABASES.includes(databaseName)) {
+    return errorResponse(
+      `Invalid database name: ${databaseName}. Must be one of: ${VALID_DATABASES.join(', ')}`,
+      'Invalid database name'
     );
   }
 
-  const flowName = `API_GET_TABLE_RELATIONSHIPS_${databaseName.toUpperCase()}`;
+  const flowName = FLOW_NAMES.API_GET_TABLE_RELATIONSHIPS(databaseName);
   const flowId = logger.startFlow(flowName, {
     database: databaseName,
     schema: schemaName,
@@ -50,13 +52,9 @@ export async function GET(request: NextRequest) {
     if (!dbConfig.enabled) {
       flowLog.error(`Database ${databaseName} is disabled`);
       flowLog.end(false, { reason: 'Database disabled' });
-      return NextResponse.json(
-        {
-          success: false,
-          message: `Database ${databaseName} is disabled`,
-          error: 'Database disabled',
-        },
-        { status: 400 }
+      return errorResponse(
+        `Database ${databaseName} is disabled`,
+        'Database disabled'
       );
     }
 
@@ -66,16 +64,16 @@ export async function GET(request: NextRequest) {
     // Fetch outgoing foreign keys (FK từ table hiện tại đi ra)
     const outgoingForeignKeys = await getTableForeignKeys(
       databaseName,
-      schemaName,
-      tableName,
+      schemaName!,
+      tableName!,
       flowId
     );
 
     // Fetch incoming foreign keys (FK từ các table khác trỏ vào table hiện tại)
     const incomingForeignKeys = await getTableReferencedBy(
       databaseName,
-      schemaName,
-      tableName,
+      schemaName!,
+      tableName!,
       flowId
     );
 
@@ -100,52 +98,32 @@ export async function GET(request: NextRequest) {
     });
     
     const allRelationships = Array.from(relationshipsMap.values());
+    const sortedRelationships = sortRelationships(allRelationships);
 
-    // Sắp xếp relationships: nhóm theo PK_TABLE (Table Relationships) trước, sau đó theo FK_COLUMN
-    const sortedRelationships = [...allRelationships].sort((a, b) => {
-      // So sánh theo PK_TABLE trước (Table Relationships)
-      const pkTableCompare = a.PK_TABLE.localeCompare(b.PK_TABLE, 'vi');
-      if (pkTableCompare !== 0) {
-        return pkTableCompare;
-      }
-      // Nếu PK_TABLE giống nhau, sắp xếp theo FK_COLUMN
-      return a.FK_COLUMN.localeCompare(b.FK_COLUMN, 'vi');
-    });
-
-    flowLog.success(`Relationships fetched successfully`, {
+    const summary = {
       outgoingCount: outgoingForeignKeys.length,
       incomingCount: incomingForeignKeys.length,
       totalCount: sortedRelationships.length,
-    });
+    };
 
-    flowLog.end(true, {
-      outgoingCount: outgoingForeignKeys.length,
-      incomingCount: incomingForeignKeys.length,
-      totalCount: sortedRelationships.length,
-    });
+    flowLog.success('Relationships fetched successfully', summary);
+    flowLog.end(true, summary);
 
-    return NextResponse.json({
-      success: true,
-      message: `Successfully fetched relationships for ${schemaName}.${tableName}`,
-      data: {
+    return successResponse(
+      `Successfully fetched relationships for ${schemaName}.${tableName}`,
+      {
         database: databaseName,
         schema: schemaName,
         table: tableName,
         relationships: sortedRelationships,
-      },
-    });
-  } catch (error) {
-    flowLog.error('Unexpected error in API get table relationships', error);
-    flowLog.end(false, { error: error instanceof Error ? error.message : 'Unknown error' });
-
-    return NextResponse.json(
-      {
-        success: false,
-        message: 'Failed to fetch table relationships',
-        error: error instanceof Error ? error.message : 'Unknown error',
-      },
-      { status: 500 }
+      }
     );
+  } catch (error) {
+    const errorMessage = error instanceof Error ? error.message : 'Unknown error';
+    flowLog.error('Unexpected error in API get table relationships', error);
+    flowLog.end(false, { error: errorMessage });
+
+    return errorResponse('Failed to fetch table relationships', errorMessage, 500);
   }
 }
 

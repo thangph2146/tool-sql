@@ -110,15 +110,6 @@ export function FilterCombobox({
     setOpen(false);
   };
 
-  const hasCustomOption =
-    searchTerm.trim().length > 0 &&
-    !options.some(
-      (option) => option.toLowerCase() === searchTerm.trim().toLowerCase()
-    ) &&
-    !pendingValues.some(
-      (val) => val.toLowerCase() === searchTerm.trim().toLowerCase()
-    );
-
   const displayValue =
     selectedValues.length > 0
       ? selectedValues.length === 1
