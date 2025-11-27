@@ -15,7 +15,7 @@ import {
   DialogTitle,
   DialogTrigger,
 } from "@/components/ui/dialog";
-import { ScrollArea } from "@radix-ui/react-scroll-area";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 import type { ForeignKeyInfo } from "@/lib/hooks/use-database-query";

@@ -1,4 +1,4 @@
-import { DbConnectionStatus } from '@/components/db-connection-status';
+import { DbConnectionStatus } from '@/components/database/connection';
 
 export default function Home() {
   return (

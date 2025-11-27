@@ -32,9 +32,9 @@ import { analyzeDataQuality } from "@/lib/utils/data-quality-utils";
 import { sortRelationships } from "@/lib/utils/relationship-utils";
 import { useFlowLoggerWithKey } from "@/lib/hooks/use-flow-logger";
 import { FLOW_NAMES } from "@/lib/constants/flow-constants";
-import { TableRelationshipsDialog } from "@/components/database/table-relationships-dialog";
-import { DataQualityAlert } from "@/components/database/data-quality-alert";
-import { DataTable } from "@/components/database/data-table";
+import { TableRelationshipsDialog } from "./table-relationships-dialog";
+import { DataQualityAlert } from "../shared";
+import { DataTable } from "./data-table";
 
 interface TableDataViewProps {
   databaseName: DatabaseName;
@@ -629,3 +629,4 @@ export function TableDataView({
     </div>
   );
 }
+

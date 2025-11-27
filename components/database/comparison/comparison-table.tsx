@@ -6,16 +6,16 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
 import { InputGroup, InputGroupInput, InputGroupButton, InputGroupAddon } from "@/components/ui/input-group";
-import { TableCell as TableCellComponent } from "@/components/database/table-cell";
+import { TableCell as TableCellComponent } from "../tables/table-cell";
 import { cn } from "@/lib/utils";
 import type { UseTableFiltersReturn } from "@/lib/hooks/use-table-filters";
 import { normalizeColumnName } from "@/lib/utils/table-column-utils";
 import { logger } from "@/lib/logger";
-import { ReferenceColumnFilter } from "@/components/database/reference-column-filter";
-import { TableRelationshipsDialog } from "@/components/database/table-relationships-dialog";
+import { ReferenceColumnFilter } from "../filters";
+import { TableRelationshipsDialog } from "../tables/table-relationships-dialog";
 import type { ForeignKeyInfo } from "@/lib/hooks/use-database-query";
 import type { DuplicateGroup } from "@/lib/utils/data-quality-utils";
-import { DataQualityAlert } from "@/components/database/data-quality-alert";
+import { DataQualityAlert } from "../shared";
 
 type ComparisonResultMap = Map<number, {
   leftRow?: Record<string, unknown>;

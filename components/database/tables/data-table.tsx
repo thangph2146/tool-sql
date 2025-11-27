@@ -17,8 +17,8 @@ import {
   InputGroupButton,
   InputGroupAddon,
 } from "@/components/ui/input-group";
-import { TableCell as TableCellComponent } from "@/components/database/table-cell";
-import { ReferenceColumnFilter } from "@/components/database/reference-column-filter";
+import { TableCell as TableCellComponent } from "./table-cell";
+import { ReferenceColumnFilter } from "../filters";
 import { normalizeColumnName } from "@/lib/utils/table-column-utils";
 import { cn } from "@/lib/utils";
 import type { DatabaseName } from "@/lib/db-config";

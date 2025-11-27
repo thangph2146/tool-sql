@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import type { DatabaseName } from "@/lib/db-config";
 import { useColumnFilterOptions } from "@/lib/hooks/use-column-filter-options";
-import { MultiSelectCombobox } from "@/components/blocks/multi-select-combobox";
+import { MultiSelectCombobox } from "./multi-select-combobox";
 import { useDebounce } from "@/lib/hooks/use-debounce";
 
 interface ReferenceColumnFilterProps {
