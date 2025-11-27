@@ -17,6 +17,7 @@ import {
 } from "@/components/ui/dialog";
 import { ScrollArea } from "@radix-ui/react-scroll-area";
 import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import type { ForeignKeyInfo } from "@/lib/hooks/use-database-query";
 
 interface TableRelationshipsDialogProps {
@@ -210,50 +211,54 @@ export function TableRelationshipsDialog({
             Foreign key relationships for {schemaName}.{tableName}
           </DialogDescription>
         </DialogHeader>
-        <div className="grid grid-cols-2 gap-4">
+        <div className={cn(
+          "grid gap-4",
+          outgoing.length > 0 && incoming.length > 0 ? "grid-cols-2" : "grid-cols-1"
+        )}>
           {/* Outgoing Column */}
-          <div className="space-y-4">
-            <div className="flex items-center gap-2 pb-2 border-b border-border">
-              <h3 className="font-semibold text-base">Outgoing</h3>
-              <Badge variant="default" className="text-xs">
-                {outgoing.length}
-              </Badge>
-            </div>
-            <ScrollArea className="max-h-[60vh] overflow-y-auto pr-4">
-              <div className="space-y-6">
-                {Object.entries(groupedOutgoing).map(([tableKey, rels]) =>
-                  renderRelationshipGroup(tableKey, rels, true)
-                )}
-                {outgoing.length === 0 && (
-                  <div className="text-sm text-muted-foreground text-center py-8">
-                    No outgoing relationships
-                  </div>
-                )}
+          {outgoing.length > 0 && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 pb-2 border-b border-border">
+                <h3 className="font-semibold text-base">Outgoing</h3>
+                <Badge variant="default" className="text-xs">
+                  {outgoing.length}
+                </Badge>
               </div>
-            </ScrollArea>
-          </div>
+              <ScrollArea className="max-h-[60vh] overflow-y-auto pr-4">
+                <div className="space-y-6">
+                  {Object.entries(groupedOutgoing).map(([tableKey, rels]) =>
+                    renderRelationshipGroup(tableKey, rels, true)
+                  )}
+                </div>
+              </ScrollArea>
+            </div>
+          )}
 
           {/* Incoming Column */}
-          <div className="space-y-4">
-            <div className="flex items-center gap-2 pb-2 border-b border-border">
-              <h3 className="font-semibold text-base">Incoming</h3>
-              <Badge variant="secondary" className="text-xs">
-                {incoming.length}
-              </Badge>
-            </div>
-            <ScrollArea className="max-h-[60vh] overflow-y-auto pr-4">
-              <div className="space-y-6">
-                {Object.entries(groupedIncoming).map(([tableKey, rels]) =>
-                  renderRelationshipGroup(tableKey, rels, false)
-                )}
-                {incoming.length === 0 && (
-                  <div className="text-sm text-muted-foreground text-center py-8">
-                    No incoming relationships
-                  </div>
-                )}
+          {incoming.length > 0 && (
+            <div className="space-y-4">
+              <div className="flex items-center gap-2 pb-2 border-b border-border">
+                <h3 className="font-semibold text-base">Incoming</h3>
+                <Badge variant="secondary" className="text-xs">
+                  {incoming.length}
+                </Badge>
               </div>
-            </ScrollArea>
-          </div>
+              <ScrollArea className="max-h-[60vh] overflow-y-auto pr-4">
+                <div className="space-y-6">
+                  {Object.entries(groupedIncoming).map(([tableKey, rels]) =>
+                    renderRelationshipGroup(tableKey, rels, false)
+                  )}
+                </div>
+              </ScrollArea>
+            </div>
+          )}
+
+          {/* Empty state when both are empty */}
+          {outgoing.length === 0 && incoming.length === 0 && (
+            <div className="text-sm text-muted-foreground text-center py-8">
+              No relationships found
+            </div>
+          )}
         </div>
       </DialogContent>
     </Dialog>

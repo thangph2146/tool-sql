@@ -58,6 +58,38 @@ export function DbConnectionStatus() {
     }));
   };
 
+  const handleTableChange = (database: DatabaseName, schema: string, table: string) => {
+    // Determine which side to update based on which database the table belongs to
+    // If it's from left table's database, update left; if from right, update right
+    // Otherwise, update the side that matches the database
+    setComparisonTables((prev) => {
+      if (prev.left && prev.left.databaseName === database) {
+        return {
+          ...prev,
+          left: { databaseName: database, schema, table },
+        };
+      } else if (prev.right && prev.right.databaseName === database) {
+        return {
+          ...prev,
+          right: { databaseName: database, schema, table },
+        };
+      } else {
+        // If database doesn't match either side, update the side that's missing or replace right
+        if (!prev.left) {
+          return {
+            ...prev,
+            left: { databaseName: database, schema, table },
+          };
+        } else {
+          return {
+            ...prev,
+            right: { databaseName: database, schema, table },
+          };
+        }
+      }
+    });
+  };
+
   const isComparisonOpen = comparisonTables.left !== null && comparisonTables.right !== null;
 
   return (
@@ -100,6 +132,7 @@ export function DbConnectionStatus() {
           onClose={handleCloseComparison}
           open={isComparisonOpen}
           asDialog={true}
+          onTableChange={handleTableChange}
         />
       )}
     </div>

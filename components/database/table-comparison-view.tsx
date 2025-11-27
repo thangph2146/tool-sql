@@ -43,6 +43,7 @@ interface TableComparisonViewProps {
   onClose?: () => void;
   open?: boolean;
   asDialog?: boolean;
+  onTableChange?: (database: DatabaseName, schema: string, table: string) => void;
 }
 
 export function TableComparisonView({
@@ -51,6 +52,7 @@ export function TableComparisonView({
   onClose,
   open = true,
   asDialog = false,
+  onTableChange,
 }: TableComparisonViewProps) {
   const [limit] = useState(DEFAULT_TABLE_LIMIT);
   const [page] = useState(0);
@@ -65,7 +67,21 @@ export function TableComparisonView({
   const flowLogRef = useRef<ReturnType<typeof logger.createFlowLogger> | null>(null);
   const currentComparisonKey = useRef<string>('');
 
-  // Initialize flow when component mounts or opens
+  // Handle flow when open state changes
+  useEffect(() => {
+    if (!open && flowLogRef.current) {
+      // If dialog/view is closed, end flow
+      flowLogRef.current.end(true, {
+        leftTable: `${leftTable.schemaName}.${leftTable.tableName}`,
+        rightTable: `${rightTable.schemaName}.${rightTable.tableName}`,
+        reason: 'Dialog/view closed',
+      });
+      flowLogRef.current = null;
+      currentComparisonKey.current = '';
+    }
+  }, [open, leftTable.schemaName, leftTable.tableName, rightTable.schemaName, rightTable.tableName]);
+
+  // Initialize flow when component mounts or comparison changes
   useEffect(() => {
     if (!open) return;
 
@@ -108,80 +124,109 @@ export function TableComparisonView({
       });
     }
 
-    // Cleanup: end flow when component unmounts or comparison changes
-    // Note: In React Strict Mode (development), cleanup runs twice, but we check currentComparisonKey
-    // to ensure we only end flow when comparison actually changes or component really unmounts
+    // Cleanup: end flow only when comparison actually changes (not on remount)
     return () => {
-      // Only end flow if this is still the current comparison
-      // In Strict Mode, if component remounts immediately, currentComparisonKey will be set again
-      // so this check will fail and flow won't be ended prematurely
-      if (flowLogRef.current && currentComparisonKey.current === comparisonKey) {
-        // Use a flag to prevent ending flow if component remounts (Strict Mode)
-        const shouldEndFlow = currentComparisonKey.current === comparisonKey;
-
-        if (shouldEndFlow) {
-          flowLogRef.current.end(true, {
-            leftTable: `${leftTable.schemaName}.${leftTable.tableName}`,
-            rightTable: `${rightTable.schemaName}.${rightTable.tableName}`,
-            reason: 'Component unmounted or comparison changed',
-          });
-          flowLogRef.current = null;
-          // Only clear currentComparisonKey if it's still the same (real unmount)
-          if (currentComparisonKey.current === comparisonKey) {
-            currentComparisonKey.current = '';
-          }
-        }
+      // Only end if comparison key changed (not just remount)
+      if (flowLogRef.current && currentComparisonKey.current && currentComparisonKey.current !== comparisonKey) {
+        flowLogRef.current.end(true, {
+          leftTable: `${leftTable.schemaName}.${leftTable.tableName}`,
+          rightTable: `${rightTable.schemaName}.${rightTable.tableName}`,
+          reason: 'Comparison changed',
+        });
+        flowLogRef.current = null;
       }
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [open, leftTable.databaseName, leftTable.schemaName, leftTable.tableName, rightTable.databaseName, rightTable.schemaName, rightTable.tableName]); // Only recreate flow when comparison changes, not when includeReferences/limit/page change
+  }, [leftTable.databaseName, leftTable.schemaName, leftTable.tableName, rightTable.databaseName, rightTable.schemaName, rightTable.tableName]); // Only recreate flow when comparison changes, not when includeReferences/limit/page/open change
 
   // Fetch relationships for both tables
   const leftRelationshipsData = useTableRelationships(
     leftTable.databaseName,
     leftTable.schemaName,
     leftTable.tableName,
-    true
+    open // Only fetch when dialog/view is open
   );
 
   const rightRelationshipsData = useTableRelationships(
     rightTable.databaseName,
     rightTable.schemaName,
     rightTable.tableName,
-    true
+    open // Only fetch when dialog/view is open
   );
 
   const leftRelationships = useMemo(() => {
-    return (
-      (leftRelationshipsData?.data as {
-        relationships?: Array<{
-          FK_NAME: string;
-          FK_SCHEMA: string;
-          FK_TABLE: string;
-          FK_COLUMN: string;
-          PK_SCHEMA: string;
-          PK_TABLE: string;
-          PK_COLUMN: string;
-        }>;
-      })?.relationships || []
-    );
-  }, [leftRelationshipsData?.data]);
+    // useTableRelationships returns TableRelationshipsResponse: { success, message, data: { database, schema, table, relationships: [...] } }
+    // So leftRelationshipsData?.data is TableRelationshipsResponse, and we need to access data.data.relationships
+    const rels = ((leftRelationshipsData?.data as { data?: { relationships?: unknown[] } })?.data?.relationships || []) as Array<{
+      FK_NAME: string;
+      FK_SCHEMA: string;
+      FK_TABLE: string;
+      FK_COLUMN: string;
+      PK_SCHEMA: string;
+      PK_TABLE: string;
+      PK_COLUMN: string;
+    }>;
+    // Sắp xếp: nhóm theo PK_TABLE trước, sau đó theo FK_COLUMN (giống table-data-view.tsx)
+    const sorted = [...rels].sort((a, b) => {
+      const pkTableCompare = a.PK_TABLE.localeCompare(b.PK_TABLE, 'vi');
+      if (pkTableCompare !== 0) {
+        return pkTableCompare;
+      }
+      return a.FK_COLUMN.localeCompare(b.FK_COLUMN, 'vi');
+    });
+    
+    // Debug logging
+    if (flowLogRef.current) {
+      flowLogRef.current.debug('Left relationships processed', {
+        rawCount: rels.length,
+        sortedCount: sorted.length,
+        isLoading: leftRelationshipsData?.isLoading,
+        hasError: !!leftRelationshipsData?.error,
+        hasData: !!leftRelationshipsData?.data,
+        dataStructure: leftRelationshipsData?.data ? Object.keys(leftRelationshipsData.data) : [],
+        relationshipsType: Array.isArray(rels) ? 'array' : typeof rels,
+      });
+    }
+    
+    return sorted;
+  }, [leftRelationshipsData?.data, leftRelationshipsData?.isLoading, leftRelationshipsData?.error]);
 
   const rightRelationships = useMemo(() => {
-    return (
-      (rightRelationshipsData?.data as {
-        relationships?: Array<{
-          FK_NAME: string;
-          FK_SCHEMA: string;
-          FK_TABLE: string;
-          FK_COLUMN: string;
-          PK_SCHEMA: string;
-          PK_TABLE: string;
-          PK_COLUMN: string;
-        }>;
-      })?.relationships || []
-    );
-  }, [rightRelationshipsData?.data]);
+    // useTableRelationships returns TableRelationshipsResponse: { success, message, data: { database, schema, table, relationships: [...] } }
+    // So rightRelationshipsData?.data is TableRelationshipsResponse, and we need to access data.data.relationships
+    const rels = ((rightRelationshipsData?.data as { data?: { relationships?: unknown[] } })?.data?.relationships || []) as Array<{
+      FK_NAME: string;
+      FK_SCHEMA: string;
+      FK_TABLE: string;
+      FK_COLUMN: string;
+      PK_SCHEMA: string;
+      PK_TABLE: string;
+      PK_COLUMN: string;
+    }>;
+    // Sắp xếp: nhóm theo PK_TABLE trước, sau đó theo FK_COLUMN (giống table-data-view.tsx)
+    const sorted = [...rels].sort((a, b) => {
+      const pkTableCompare = a.PK_TABLE.localeCompare(b.PK_TABLE, 'vi');
+      if (pkTableCompare !== 0) {
+        return pkTableCompare;
+      }
+      return a.FK_COLUMN.localeCompare(b.FK_COLUMN, 'vi');
+    });
+    
+    // Debug logging
+    if (flowLogRef.current) {
+      flowLogRef.current.debug('Right relationships processed', {
+        rawCount: rels.length,
+        sortedCount: sorted.length,
+        isLoading: rightRelationshipsData?.isLoading,
+        hasError: !!rightRelationshipsData?.error,
+        hasData: !!rightRelationshipsData?.data,
+        dataStructure: rightRelationshipsData?.data ? Object.keys(rightRelationshipsData.data) : [],
+        relationshipsType: Array.isArray(rels) ? 'array' : typeof rels,
+      });
+    }
+    
+    return sorted;
+  }, [rightRelationshipsData?.data, rightRelationshipsData?.isLoading, rightRelationshipsData?.error]);
 
   // Filter state hooks (debounced values used to request filtered data)
   const leftTableFilters = useTableFilters();
@@ -194,7 +239,7 @@ export function TableComparisonView({
     leftTable.tableName,
     limit,
     offset,
-    true,
+    open, // Only fetch when dialog/view is open
     includeReferences,
     leftTableFilters.debouncedFilters
   );
@@ -205,7 +250,7 @@ export function TableComparisonView({
     rightTable.tableName,
     limit,
     offset,
-    true,
+    open, // Only fetch when dialog/view is open
     includeReferences,
     rightTableFilters.debouncedFilters
   );
@@ -234,7 +279,7 @@ export function TableComparisonView({
     }
   }, [leftTableData, rightTableData, offset, limit, includeReferences]);
 
-  // Log errors
+  // Log errors and loading states
   useEffect(() => {
     if (leftData.error && flowLogRef.current) {
       flowLogRef.current.error('Error loading left table data', leftData.error);
@@ -242,7 +287,30 @@ export function TableComparisonView({
     if (rightData.error && flowLogRef.current) {
       flowLogRef.current.error('Error loading right table data', rightData.error);
     }
-  }, [leftData.error, rightData.error]);
+    if (leftRelationshipsData?.error && flowLogRef.current) {
+      flowLogRef.current.error('Error loading left relationships', leftRelationshipsData.error);
+    }
+    if (rightRelationshipsData?.error && flowLogRef.current) {
+      flowLogRef.current.error('Error loading right relationships', rightRelationshipsData.error);
+    }
+    if (flowLogRef.current) {
+      flowLogRef.current.debug('Data loading states', {
+        leftLoading: leftData.isLoading,
+        rightLoading: rightData.isLoading,
+        leftRelationshipsLoading: leftRelationshipsData?.isLoading,
+        rightRelationshipsLoading: rightRelationshipsData?.isLoading,
+        leftError: leftData.error ? (leftData.error instanceof Error ? leftData.error.message : String(leftData.error)) : null,
+        rightError: rightData.error ? (rightData.error instanceof Error ? rightData.error.message : String(rightData.error)) : null,
+        leftRelationshipsError: leftRelationshipsData?.error ? (leftRelationshipsData.error instanceof Error ? leftRelationshipsData.error.message : String(leftRelationshipsData.error)) : null,
+        rightRelationshipsError: rightRelationshipsData?.error ? (rightRelationshipsData.error instanceof Error ? rightRelationshipsData.error.message : String(rightRelationshipsData.error)) : null,
+        leftHasData: !!leftTableData,
+        rightHasData: !!rightTableData,
+        leftRelationshipsCount: leftRelationships.length,
+        rightRelationshipsCount: rightRelationships.length,
+        open,
+      });
+    }
+  }, [leftData.error, rightData.error, leftData.isLoading, rightData.isLoading, leftTableData, rightTableData, open, leftRelationshipsData?.error, leftRelationshipsData?.isLoading, rightRelationshipsData?.error, rightRelationshipsData?.isLoading, leftRelationships.length, rightRelationships.length]);
 
   // Get all unique columns from both tables
   const allColumns = useMemo(() => {
@@ -270,15 +338,20 @@ export function TableComparisonView({
   useEffect(() => {
     if (allColumns.length > 0) {
       setSelectedColumns((prev) => {
-        // Only update if empty
-        if (prev.size === 0) {
+        // Update if empty or if allColumns has changed significantly
+        // Check if current selectedColumns matches allColumns
+        const prevArray = Array.from(prev).sort();
+        const allColumnsSorted = [...allColumns].sort();
+        const isMatching = prevArray.length === allColumnsSorted.length && 
+          prevArray.every((val, idx) => val === allColumnsSorted[idx]);
+        
+        if (prev.size === 0 || !isMatching) {
           return new Set(allColumns);
         }
         return prev;
       });
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [allColumns.length]); // Only depend on length to avoid infinite loop
+  }, [allColumns]); // Depend on allColumns array, not just length
 
   // Get columns to compare (only selected ones)
   const columnsToCompare = useMemo(() => {
@@ -288,11 +361,19 @@ export function TableComparisonView({
   // Get columns to display using utility function
   const leftColumnsToDisplay = useMemo(() => {
     if (!leftTableData?.columns) return [];
+    // If selectedColumns is empty, show all columns from left table
+    if (selectedColumns.size === 0) {
+      return leftTableData.columns.map(c => String(c));
+    }
     return getColumnsToDisplay(leftTableData.columns, selectedColumns);
   }, [selectedColumns, leftTableData?.columns]);
 
   const rightColumnsToDisplay = useMemo(() => {
     if (!rightTableData?.columns) return [];
+    // If selectedColumns is empty, show all columns from right table
+    if (selectedColumns.size === 0) {
+      return rightTableData.columns.map(c => String(c));
+    }
     return getColumnsToDisplay(rightTableData.columns, selectedColumns);
   }, [selectedColumns, rightTableData?.columns]);
 
@@ -306,6 +387,23 @@ export function TableComparisonView({
   // Memoize computed values for performance
   const isLoading = useMemo(() => leftData.isLoading || rightData.isLoading, [leftData.isLoading, rightData.isLoading]);
   const hasError = useMemo(() => leftData.error || rightData.error, [leftData.error, rightData.error]);
+  
+  // Debug: Log render conditions
+  useEffect(() => {
+    if (flowLogRef.current) {
+      flowLogRef.current.debug('Render conditions', {
+        isLoading,
+        hasError,
+        leftTableDataExists: !!leftTableData,
+        rightTableDataExists: !!rightTableData,
+        leftTableDataRows: leftTableData?.rows?.length ?? 0,
+        rightTableDataRows: rightTableData?.rows?.length ?? 0,
+        leftTableDataColumns: leftTableData?.columns?.length ?? 0,
+        rightTableDataColumns: rightTableData?.columns?.length ?? 0,
+        shouldRenderTables: !isLoading && !hasError && !!leftTableData && !!rightTableData,
+      });
+    }
+  }, [isLoading, hasError, leftTableData, rightTableData]);
   
   // Memoize active filter counts
   const leftActiveFilterCount = leftTableFilters.activeFilterCount;
@@ -728,6 +826,7 @@ export function TableComparisonView({
                   includeReferences={includeReferences}
                   totalRows={leftTableData.totalRows}
                   filteredRowCount={leftTableData.filteredRowCount}
+                  onTableChange={onTableChange ? (schema, table) => onTableChange(leftTable.databaseName, schema, table) : undefined}
                   containerClassName={cn(
                     "h-full max-w-[48vw] mx-auto px-4",
                     showColumnSelector ? "max-h-[calc(100vh-600px)]" : "max-h-[500px]"
@@ -753,6 +852,7 @@ export function TableComparisonView({
                   includeReferences={includeReferences}
                   totalRows={rightTableData.totalRows}
                   filteredRowCount={rightTableData.filteredRowCount}
+                  onTableChange={onTableChange ? (schema, table) => onTableChange(rightTable.databaseName, schema, table) : undefined}
                   containerClassName={cn(
                     "h-full max-w-[48vw] mx-auto px-4",
                     showColumnSelector ? "max-h-[calc(100vh-600px)]" : "max-h-[500px]"
@@ -766,9 +866,28 @@ export function TableComparisonView({
     </div>
   );
 
+  // Debug: Log dialog rendering
+  useEffect(() => {
+    if (flowLogRef.current) {
+      flowLogRef.current.debug('Dialog rendering state', {
+        asDialog,
+        open,
+        isLoading,
+        hasError,
+        leftTableDataExists: !!leftTableData,
+        rightTableDataExists: !!rightTableData,
+        shouldRenderContent: !isLoading && !hasError && !!leftTableData && !!rightTableData,
+      });
+    }
+  }, [asDialog, open, isLoading, hasError, leftTableData, rightTableData]);
+
   if (asDialog) {
     return (
-      <Dialog open={open} onOpenChange={(isOpen) => !isOpen && onClose?.()}>
+      <Dialog open={open} onOpenChange={(isOpen) => {
+        if (!isOpen && onClose) {
+          onClose();
+        }
+      }}>
         <DialogContent className="max-w-[95vw] max-h-[90vh] w-full pb-12" showCloseButton={true}>
           <DialogHeader className="sr-only">
             <DialogTitle>
