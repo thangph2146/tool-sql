@@ -17,7 +17,6 @@ import { Field, FieldContent, FieldLabel } from "@/components/ui/field";
 import { cn } from "@/lib/utils";
 import { ComparisonTable } from "./comparison-table";
 import { ComparisonLoadingState } from "./comparison-loading-state";
-import { ComparisonStatsBar } from "./comparison-stats-bar";
 import { DEFAULT_TABLE_LIMIT } from "@/lib/constants/table-constants";
 import { getColumnsToDisplay } from "@/lib/utils/table-column-utils";
 import { sortRelationships } from "@/lib/utils/relationship-utils";
@@ -345,12 +344,6 @@ export function TableComparisonView({
   const leftActiveFilterCount = leftTableFilters.activeFilterCount;
   const rightActiveFilterCount = rightTableFilters.activeFilterCount;
   
-  // Memoize difference count
-  const differenceCount = useMemo(
-    () => comparisonResult ? Array.from(comparisonResult.values()).filter((d) => d.status !== "same").length : 0,
-    [comparisonResult]
-  );
-
 
   const content = (
     <div className="w-full h-full flex flex-col">
@@ -405,21 +398,6 @@ export function TableComparisonView({
         />
         {!isLoading && !hasError && leftTableData && rightTableData ? (
           <div className="flex-1 flex flex-col min-h-0">
-            {/* Comparison Stats */}
-            <ComparisonStatsBar
-              leftTable={leftTable}
-              rightTable={rightTable}
-              leftTableData={leftTableData}
-              rightTableData={rightTableData}
-              differenceCount={differenceCount}
-              columnsToCompare={columnsToCompare}
-              allColumns={allColumns}
-              leftRelationships={leftRelationships}
-              rightRelationships={rightRelationships}
-              leftDataQuality={leftDataQuality}
-              rightDataQuality={rightDataQuality}
-            />
-
             {/* Side by Side Tables */}
             <div className="flex-1 grid grid-cols-2 gap-0 min-h-0 overflow-hidden">
               {/* Left Table */}
