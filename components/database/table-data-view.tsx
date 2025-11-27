@@ -558,10 +558,9 @@ export function TableDataView({
               </Button>
               {hasActiveFilters && (
                 <Button
-                  variant="ghost"
+                  variant="destructive"
                   size="sm"
                   onClick={handleClearFilters}
-                  className="gap-2 text-xs"
                 >
                   <XCircle className="h-3 w-3" />
                   Clear All Filters

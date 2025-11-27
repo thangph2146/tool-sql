@@ -24,6 +24,7 @@ export function normalizeVietnameseText(text: string): string {
   return text
     .normalize("NFD")
     .replace(/[\u0300-\u036f]/g, "")
+    .replace(/\s+/g, " ")
     .toLowerCase()
     .trim();
 }
@@ -91,7 +92,21 @@ export function filterTableRows<T extends Record<string, unknown>>(
 
         // Exact match với display value (phần trước newline)
         // Khi filter chỉ có tên (không có ID), match với tất cả rows có cùng display value
+        // Điều này đảm bảo khi có nhiều người cùng tên nhưng khác ID, tất cả sẽ được trả về
         if (displayValueTrimmed === filterValueTrimmed) {
+          exactMatch = true;
+        }
+        
+        // Match display value sau khi normalize newline trong filter
+        const filterDisplayOnlyForExact = filterValueTrimmed.split(/\r?\n/)[0]?.trim() || filterValueTrimmed;
+        if (displayValueTrimmed === filterDisplayOnlyForExact) {
+          exactMatch = true;
+        }
+        
+        // Nếu filter chỉ có tên (không có format ID), match với tất cả rows có cùng display value
+        // Bỏ qua việc kiểm tra ID để match với tất cả rows có cùng tên
+        const hasIdInFilter = filterValueTrimmed.includes("(ID:");
+        if (!hasIdInFilter && displayValueTrimmed === filterValueTrimmed) {
           exactMatch = true;
         }
 
@@ -184,9 +199,9 @@ export function filterTableRows<T extends Record<string, unknown>>(
         }
 
         // Match partial với cell value (có thể có newline trong filter)
-        const filterDisplayOnly = filterValueTrimmed.split(/\r?\n/)[0]?.trim() || filterValueTrimmed;
-        const filterDisplayNormalized = normalizeVietnameseText(filterDisplayOnly);
-        const filterDisplayLower = filterDisplayOnly.toLowerCase();
+        const filterDisplayOnlyForPartial = filterValueTrimmed.split(/\r?\n/)[0]?.trim() || filterValueTrimmed;
+        const filterDisplayNormalized = normalizeVietnameseText(filterDisplayOnlyForPartial);
+        const filterDisplayLower = filterDisplayOnlyForPartial.toLowerCase();
 
         const cellNormalized = normalizeVietnameseText(cellStr);
         return (
@@ -226,43 +241,53 @@ export function collectColumnUniqueValues({
       (rel) => normalizeColumnName(rel.FK_COLUMN) === normalizedColumn
     );
 
-  const values = new Set<string>();
+  // Sử dụng Map với key là OriginalId (hoặc cellValue) để đảm bảo mỗi row chỉ có 1 option
+  const valuesMap = new Map<string, string>();
 
   rows.forEach((row) => {
     const cellValue = row[columnName];
     if (cellValue === null || cellValue === undefined) {
-      values.add("(null)");
+      valuesMap.set("__null__", "(null)");
       return;
     }
 
     const cellStr = String(cellValue);
 
     if (hasRelationship) {
-      const parts = cellStr.split(/\r?\n/);
-      const displayValue = parts[0] || cellStr;
-      const displayValueTrimmed = displayValue.trim();
-
-      if (displayValueTrimmed) {
-        values.add(displayValueTrimmed);
-      }
-
       const originalIdColumn = `${columnName}_OriginalId`;
       const originalIdValue = row[originalIdColumn];
+      
       if (originalIdValue !== null && originalIdValue !== undefined) {
         const fkStr = String(originalIdValue).trim();
-        values.add(fkStr);
-        if (displayValueTrimmed) {
-          values.add(`${displayValueTrimmed} (ID: ${fkStr})`);
+        // Sử dụng OriginalId làm key để đảm bảo mỗi row chỉ có 1 option
+        if (!valuesMap.has(fkStr)) {
+          const parts = cellStr.split(/\r?\n/);
+          const displayValue = parts[0] || cellStr;
+          const displayValueTrimmed = displayValue.trim();
+          
+          // Chỉ thêm 1 option duy nhất: format "Display (ID: xxx)" hoặc cellStr nếu không có display
+          if (displayValueTrimmed) {
+            valuesMap.set(fkStr, `${displayValueTrimmed} (ID: ${fkStr})`);
+          } else {
+            valuesMap.set(fkStr, cellStr.trim());
+          }
         }
-        values.add(cellStr.trim());
-      } else if (displayValueTrimmed) {
-        values.add(cellStr.trim());
+      } else {
+        // Nếu không có OriginalId, sử dụng cellStr làm key
+        const cellKey = cellStr.trim();
+        if (!valuesMap.has(cellKey)) {
+          valuesMap.set(cellKey, cellKey);
+        }
       }
     } else {
-      values.add(cellStr.trim());
+      // Không có relationship, sử dụng cellStr làm key
+      const cellKey = cellStr.trim();
+      if (!valuesMap.has(cellKey)) {
+        valuesMap.set(cellKey, cellKey);
+      }
     }
   });
 
-  return Array.from(values);
+  return Array.from(valuesMap.values());
 }
 

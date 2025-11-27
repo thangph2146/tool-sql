@@ -207,20 +207,6 @@ export function FilterCombobox({
                     </CommandItem>
                   );
                 })}
-                {hasCustomOption && (
-                  <CommandItem
-                    value={searchTerm.trim()}
-                    onSelect={() => {
-                      toggleValue(searchTerm.trim());
-                    }}
-                    className="text-xs italic text-muted-foreground cursor-pointer"
-                  >
-                    <div className="flex items-center gap-2">
-                      <div className="flex h-4 w-4 items-center justify-center rounded border border-input shrink-0" />
-                      <span>Use &ldquo;{searchTerm.trim()}&rdquo;</span>
-                    </div>
-                  </CommandItem>
-                )}
               </CommandGroup>
             </CommandList>
           </Command>

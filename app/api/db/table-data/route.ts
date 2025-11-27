@@ -3,7 +3,8 @@ import { getTableData, getTableDataWithReferences } from '@/lib/db-manager';
 import { getDatabaseConfig } from '@/lib/db-config';
 import type { DatabaseName } from '@/lib/db-config';
 import { logger } from '@/lib/logger';
-import { filterTableRows, FilterRelationships } from '@/lib/utils/table-filter-utils';
+import { filterTableRows, FilterRelationships, normalizeVietnameseText } from '@/lib/utils/table-filter-utils';
+import { HIDDEN_COLUMNS, HIDDEN_COLUMN_PATTERNS } from '@/lib/constants/table-constants';
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -98,6 +99,59 @@ export async function GET(request: NextRequest) {
   });
   const flowLog = logger.createFlowLogger(flowId);
 
+  // Helper function to check if a column should be hidden
+  const isColumnHidden = (columnName: string): boolean => {
+    // Check exact match
+    for (const hiddenCol of HIDDEN_COLUMNS) {
+      if (hiddenCol === columnName) {
+        return true;
+      }
+    }
+    // Check pattern match
+    return HIDDEN_COLUMN_PATTERNS.some((pattern) => columnName.endsWith(pattern));
+  };
+
+  // Helper function to filter out hidden columns
+  const filterHiddenColumns = (columns: string[]): string[] => {
+    return columns.filter((col) => !isColumnHidden(col));
+  };
+
+  // Helper function to get first visible column for sorting
+  const getFirstVisibleColumn = (columns: string[]): string | null => {
+    const visibleColumns = filterHiddenColumns(columns);
+    return visibleColumns.length > 0 ? visibleColumns[0] : null;
+  };
+
+  // Helper function to get Oid column for sorting (preferred)
+  const getOidColumn = (columns: string[]): string | null => {
+    // Tìm cột Oid trong danh sách columns (không bị ẩn)
+    const oidColumn = columns.find((col) => col === 'Oid' && !isColumnHidden(col));
+    return oidColumn || null;
+  };
+
+  // Helper to build normalized sort key from cell value
+  const getSortKeyFromValue = (value: unknown): string => {
+    if (value === null || value === undefined) {
+      return '';
+    }
+    const raw = String(value);
+    const display = raw.split(/\r?\n/)[0]?.trim() || raw.trim();
+    return normalizeVietnameseText(display);
+  };
+
+  // Helper function to remove hidden column properties from rows
+  const filterHiddenPropertiesFromRows = (rows: Record<string, unknown>[]): Record<string, unknown>[] => {
+    return rows.map((row) => {
+      const filteredRow: Record<string, unknown> = {};
+      Object.keys(row).forEach((key) => {
+        if (!isColumnHidden(key)) {
+          filteredRow[key] = row[key];
+        }
+      });
+      return filteredRow;
+    });
+  };
+
   try {
     flowLog.info(`Validating database configuration`);
     
@@ -151,21 +205,41 @@ export async function GET(request: NextRequest) {
           );
 
       const relationships = extractRelationships(tableData as { relationships?: FilterRelationships[] });
-      const rows = tableData.rows;
+      let rows = tableData.rows;
+      
+      // Lọc các cột ẩn
+      const visibleColumns = filterHiddenColumns(tableData.columns);
+      
+      // Sắp xếp rows theo bảng chữ cái (ưu tiên cột Oid, nếu không có thì dùng cột đầu tiên) chỉ khi includeReferences = true
+      if (includeReferences && rows.length > 0 && visibleColumns.length > 0) {
+        // Ưu tiên sắp xếp theo cột Oid, nếu không có thì dùng cột đầu tiên
+        const sortColumn = getOidColumn(tableData.columns) || getFirstVisibleColumn(tableData.columns);
+        if (sortColumn) {
+          rows = [...rows].sort((a, b) => {
+            const aValue = getSortKeyFromValue(a[sortColumn]);
+            const bValue = getSortKeyFromValue(b[sortColumn]);
+            return aValue.localeCompare(bValue, 'vi');
+          });
+        }
+      }
+      
+      // Loại bỏ các properties ẩn khỏi rows
+      rows = filterHiddenPropertiesFromRows(rows);
+      
       const filteredRowCount = rows.length;
       const relationshipCount = relationships.length;
 
       flowLog.success(`Data fetched successfully`, {
         rowsReturned: rows.length,
         totalRows: tableData.totalRows,
-        columns: tableData.columns.length,
+        columns: visibleColumns.length,
         relationshipCount,
       });
 
       flowLog.end(true, {
         rowsReturned: rows.length,
         totalRows: tableData.totalRows,
-        columns: tableData.columns.length,
+        columns: visibleColumns.length,
         filteredRowCount,
         filtersApplied: {},
         includeReferences,
@@ -179,7 +253,7 @@ export async function GET(request: NextRequest) {
           database: databaseName,
           schema: schemaName,
           table: tableName,
-          columns: tableData.columns,
+          columns: visibleColumns,
           rows,
           totalRows: tableData.totalRows,
           hasMore: tableData.hasMore,
@@ -260,9 +334,29 @@ export async function GET(request: NextRequest) {
     const filteredHasMore = filteredRowCount > offset + paginatedRows.length;
     const relationshipCount = relationships.length;
 
+    // Lọc các cột ẩn
+    const visibleColumns = filterHiddenColumns(columns);
+
+    // Sắp xếp paginatedRows theo bảng chữ cái (ưu tiên cột Oid, nếu không có thì dùng cột đầu tiên) chỉ khi includeReferences = true
+    let sortedRows = paginatedRows;
+    if (includeReferences && sortedRows.length > 0 && visibleColumns.length > 0) {
+      // Ưu tiên sắp xếp theo cột Oid, nếu không có thì dùng cột đầu tiên
+      const sortColumn = getOidColumn(columns) || getFirstVisibleColumn(columns);
+      if (sortColumn) {
+        sortedRows = [...sortedRows].sort((a, b) => {
+          const aValue = getSortKeyFromValue(a[sortColumn]);
+          const bValue = getSortKeyFromValue(b[sortColumn]);
+          return aValue.localeCompare(bValue, 'vi');
+        });
+      }
+    }
+
+    // Loại bỏ các properties ẩn khỏi rows
+    sortedRows = filterHiddenPropertiesFromRows(sortedRows);
+
     flowLog.success('Filtered data prepared', {
       filteredRowCount,
-      rowsReturned: paginatedRows.length,
+      rowsReturned: sortedRows.length,
       totalRows,
       chunkSize,
       chunksProcessed: chunkIndex,
@@ -270,9 +364,9 @@ export async function GET(request: NextRequest) {
     });
 
     flowLog.end(true, {
-      rowsReturned: paginatedRows.length,
+      rowsReturned: sortedRows.length,
       totalRows,
-      columns: columns.length,
+      columns: visibleColumns.length,
       filteredRowCount,
       filtersApplied: filters,
       includeReferences,
@@ -288,8 +382,8 @@ export async function GET(request: NextRequest) {
         database: databaseName,
         schema: schemaName,
         table: tableName,
-        columns,
-        rows: paginatedRows,
+        columns: visibleColumns,
+        rows: sortedRows,
         totalRows,
         hasMore: filteredHasMore,
         limit,
