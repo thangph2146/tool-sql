@@ -1,7 +1,7 @@
 import { useState, useMemo, useEffect, useCallback } from "react";
 import type { DatabaseName } from "@/lib/db-config";
 import { useColumnFilterOptions } from "@/lib/hooks/use-column-filter-options";
-import { FilterCombobox } from "@/components/database/filter-combobox";
+import { MultiSelectCombobox } from "@/components/blocks/multi-select-combobox";
 import { useDebounce } from "@/lib/hooks/use-debounce";
 
 interface ReferenceColumnFilterProps {
@@ -95,7 +95,7 @@ export function ReferenceColumnFilter({
   }, []);
 
   return (
-    <FilterCombobox
+    <MultiSelectCombobox
       column={columnName}
       value={filterValue}
       options={options}

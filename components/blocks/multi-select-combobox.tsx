@@ -22,7 +22,7 @@ import { Check, XCircle, ChevronDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
 
-interface FilterComboboxProps {
+interface MultiSelectComboboxProps {
   column: string;
   options: string[];
   value: string;
@@ -34,7 +34,7 @@ interface FilterComboboxProps {
   onSearchChange?: (search: string) => void;
 }
 
-export function FilterCombobox({
+export function MultiSelectCombobox({
   column,
   options,
   value,
@@ -44,7 +44,7 @@ export function FilterCombobox({
   onClear,
   onOpenChange,
   onSearchChange,
-}: FilterComboboxProps) {
+}: MultiSelectComboboxProps) {
   const [open, setOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [pendingValues, setPendingValues] = useState<string[]>([]);
