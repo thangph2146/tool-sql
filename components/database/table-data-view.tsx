@@ -11,7 +11,6 @@ import {
   Filter,
   XCircle,
   Link2,
-  AlertTriangle,
 } from "lucide-react";
 import type { DatabaseName } from "@/lib/db-config";
 import {
@@ -24,39 +23,18 @@ import {
   TABLE_LIMIT_OPTIONS,
   DEFAULT_TABLE_LIMIT,
 } from "@/lib/constants/table-constants";
-import { TableCell as TableCellComponent } from "@/components/database/table-cell";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import {
-  InputGroup,
-  InputGroupInput,
-  InputGroupButton,
-  InputGroupAddon,
-} from "@/components/ui/input-group";
 import { Field, FieldContent, FieldLabel } from "@/components/ui/field";
-import {
-  Table,
-  TableHeader,
-  TableBody,
-  TableHead,
-  TableRow,
-  TableCell,
-} from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
-import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
-import { ScrollArea } from "@/components/ui/scroll-area";
-import { cn } from "@/lib/utils";
-import {
-  normalizeColumnName,
-  filterHiddenColumns,
-} from "@/lib/utils/table-column-utils";
+import { filterHiddenColumns } from "@/lib/utils/table-column-utils";
 import { analyzeDataQuality } from "@/lib/utils/data-quality-utils";
 import { sortRelationships } from "@/lib/utils/relationship-utils";
 import { useFlowLoggerWithKey } from "@/lib/hooks/use-flow-logger";
 import { FLOW_NAMES } from "@/lib/constants/flow-constants";
-import { ReferenceColumnFilter } from "@/components/database/reference-column-filter";
 import { TableRelationshipsDialog } from "@/components/database/table-relationships-dialog";
 import { DataQualityAlert } from "@/components/database/data-quality-alert";
+import { DataTable } from "@/components/database/data-table";
 
 interface TableDataViewProps {
   databaseName: DatabaseName;
@@ -503,45 +481,14 @@ export function TableDataView({
                     </span>
                   )}
                 </Button>
-                {(dataQuality.duplicateGroups.length > 0 ||
-                  dataQuality.nameDuplicateGroups.length > 0 ||
-                  dataQuality.redundantColumns.length > 0) && (
-                  <Popover>
-                    <PopoverTrigger asChild>
-                      <Button
-                        variant="outline"
-                        size="sm"
-                        className="gap-2 text-amber-700 border-amber-300 hover:bg-amber-50"
-                      >
-                        <AlertTriangle className="h-4 w-4" />
-                        <span className="hidden sm:inline">Data Quality</span>
-                        <Badge
-                          variant="secondary"
-                          className="bg-amber-500 text-white text-xs"
-                        >
-                          {dataQuality.duplicateIndexSet.size +
-                            dataQuality.nameDuplicateIndexSet.size +
-                            dataQuality.redundantColumns.length}
-                        </Badge>
-                      </Button>
-                    </PopoverTrigger>
-                    <PopoverContent
-                      align="start"
-                    >
-                      <ScrollArea className="max-h-[300px] overflow-y-auto">
-                        <DataQualityAlert
-                          duplicateGroups={dataQuality.duplicateGroups}
-                          duplicateIndexSet={dataQuality.duplicateIndexSet}
-                          nameDuplicateGroups={dataQuality.nameDuplicateGroups}
-                          nameDuplicateIndexSet={dataQuality.nameDuplicateIndexSet}
-                          redundantColumns={dataQuality.redundantColumns}
-                          onRowNavigate={handleScrollToRow}
-                          className="border-0 bg-transparent"
-                        />
-                      </ScrollArea>
-                    </PopoverContent>
-                  </Popover>
-                )}
+                <DataQualityAlert
+                  duplicateGroups={dataQuality.duplicateGroups}
+                  duplicateIndexSet={dataQuality.duplicateIndexSet}
+                  nameDuplicateGroups={dataQuality.nameDuplicateGroups}
+                  nameDuplicateIndexSet={dataQuality.nameDuplicateIndexSet}
+                  redundantColumns={dataQuality.redundantColumns}
+                  onRowNavigate={handleScrollToRow}
+                />
               </div>
               {hasActiveFilters && (
                 <Button
@@ -555,153 +502,27 @@ export function TableDataView({
               )}
             </div>
 
-            <Table
-              key={`table-${debouncedFilterKey}-${tableRows.length}`}
+            <DataTable
+              columns={visibleColumns}
+              rows={tableRows}
+              filters={filters}
+              showFilters={showFilters}
+              relationships={relationships}
+              includeReferences={includeReferences}
+              databaseName={databaseName}
+              schemaName={schemaName}
+              tableName={tableName}
+              onFilterChange={handleFilterChange}
+              onClearFilter={handleClearFilter}
+              hasActiveFilters={hasActiveFilters}
+              duplicateIndexSet={dataQuality.duplicateIndexSet}
+              nameDuplicateIndexSet={dataQuality.nameDuplicateIndexSet}
+              highlightedRow={highlightedRow}
+              rowRefs={rowRefs}
+              debouncedFilterKey={debouncedFilterKey}
               containerClassName="h-full min-h-[300px] max-h-[500px] max-w-[85vw] px-4"
               style={{ height: "100%", maxHeight: "100%" }}
-            >
-              <TableHeader>
-                <TableRow>
-                  {visibleColumns.map((column) => {
-                    // Check if this column has a relationship
-                    const hasRelationship =
-                      includeReferences &&
-                      relationships.some((rel) => rel.FK_COLUMN === column);
-
-                    return (
-                      <TableHead key={column} className="font-semibold p-2">
-                        <div className="flex flex-col gap-1">
-                          <div className="flex items-center gap-1">
-                            <span>{column}</span>
-                            {hasRelationship && (
-                              <Badge
-                                variant="secondary"
-                                className="text-xs px-1 py-0"
-                              >
-                                <Link2 className="h-3 w-3 mr-1" />
-                                Ref
-                              </Badge>
-                            )}
-                          </div>
-                          {showFilters &&
-                            (() => {
-                              const hasRelationshipForColumn =
-                                includeReferences &&
-                                relationships.some(
-                                  (rel) =>
-                                    normalizeColumnName(rel.FK_COLUMN) ===
-                                    normalizeColumnName(column)
-                                );
-                              const filterValue = filters[column] || "";
-
-                              if (
-                                hasRelationshipForColumn &&
-                                includeReferences
-                              ) {
-                                return (
-                                  <ReferenceColumnFilter
-                                    columnName={column}
-                                    databaseName={databaseName}
-                                    schemaName={schemaName}
-                                    tableName={tableName}
-                                    includeReferences={includeReferences}
-                                    showFilters={showFilters}
-                                    hasRelationship={hasRelationshipForColumn}
-                                    filterValue={filterValue}
-                                    onChange={(nextValue) =>
-                                      handleFilterChange(column, nextValue)
-                                    }
-                                    onClear={() => handleClearFilter(column)}
-                                  />
-                                );
-                              }
-
-                              return (
-                                <InputGroup className="h-7">
-                                  <InputGroupInput
-                                    type="text"
-                                    placeholder="Filter..."
-                                    value={filterValue}
-                                    onChange={(e) =>
-                                      handleFilterChange(column, e.target.value)
-                                    }
-                                    className="text-xs"
-                                  />
-                                  {filterValue && (
-                                    <InputGroupAddon align="inline-end">
-                                      <InputGroupButton
-                                        variant="ghost"
-                                        size="icon-xs"
-                                        onClick={() => handleClearFilter(column)}
-                                        type="button"
-                                        className="text-destructive hover:text-destructive/80"
-                                      >
-                                        <XCircle className="h-3 w-3" />
-                                      </InputGroupButton>
-                                    </InputGroupAddon>
-                                  )}
-                                </InputGroup>
-                              );
-                            })()}
-                        </div>
-                      </TableHead>
-                    );
-                  })}
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {tableRows.length > 0 ? (
-                  tableRows.map((row, rowIndex) => {
-                    const firstColumn = tableData.columns[0];
-                    const primaryOriginalId =
-                      firstColumn && row[`${firstColumn}_OriginalId`];
-                    const fallbackOriginalId = row["Oid_OriginalId"];
-                    const uniqueKey =
-                      primaryOriginalId ??
-                      fallbackOriginalId ??
-                      row["Id"] ??
-                      row["Oid"] ??
-                      (firstColumn ? row[firstColumn] : undefined) ??
-                      `${rowIndex}-${debouncedFilterKey}`;
-                    const isDuplicateRow = dataQuality.duplicateIndexSet.has(rowIndex);
-                    const isNameDuplicate = dataQuality.nameDuplicateIndexSet.has(rowIndex);
-                    const isHighlighted = highlightedRow === rowIndex;
-                    return (
-                      <TableRow
-                        key={String(uniqueKey)}
-                        ref={(el) => {
-                          rowRefs.current[rowIndex] = el;
-                        }}
-                        className={cn(
-                          (isDuplicateRow || isNameDuplicate) &&
-                            "ring-1 ring-amber-400 bg-amber-50/60",
-                          isHighlighted && "ring-2 ring-primary"
-                        )}
-                      >
-                      {visibleColumns.map(
-                          (column) => (
-                            <TableCell key={column} className="max-w-xs">
-                              <TableCellComponent value={row[column]} />
-                            </TableCell>
-                          )
-                        )}
-                      </TableRow>
-                    );
-                  })
-                ) : (
-                  <TableRow>
-                    <TableCell
-                      colSpan={visibleColumns.length}
-                      className="text-center py-8 text-muted-foreground"
-                    >
-                      {hasActiveFilters
-                        ? "No rows match the current filters"
-                        : "No data available for this table"}
-                    </TableCell>
-                  </TableRow>
-                )}
-              </TableBody>
-            </Table>
+            />
 
             {/* Pagination */}
             <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 border-t border-border">

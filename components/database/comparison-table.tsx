@@ -149,21 +149,14 @@ export function ComparisonTable({
                 )}
               </span>
             )}
-            {duplicateGroups.length > 0 && (
-              <Badge variant="destructive" className="text-[10px]">
-                Duplicates: {duplicateRowIndices.size}
-              </Badge>
-            )}
-            {nameDuplicateGroups.length > 0 && (
-              <Badge variant="outline" className="text-[10px] border-amber-300 text-amber-700">
-                Oid trùng tên: {nameDuplicateRowIndices.size}
-              </Badge>
-            )}
-            {redundantColumns.length > 0 && (
-              <Badge variant="outline" className="text-[10px] border-amber-300 text-amber-700">
-                Redundant cols: {redundantColumns.length}
-              </Badge>
-            )}
+            <DataQualityAlert
+              duplicateGroups={duplicateGroups}
+              duplicateIndexSet={duplicateRowIndices}
+              nameDuplicateGroups={nameDuplicateGroups}
+              nameDuplicateIndexSet={nameDuplicateRowIndices}
+              redundantColumns={redundantColumns}
+              onRowNavigate={handleScrollToDuplicateRow}
+            />
           </div>
           <div className="flex items-center gap-2">
             {includeReferences && (
@@ -218,15 +211,6 @@ export function ComparisonTable({
           </div>
         </div>
       </div>
-      <DataQualityAlert
-        duplicateGroups={duplicateGroups}
-        duplicateIndexSet={duplicateRowIndices}
-        nameDuplicateGroups={nameDuplicateGroups}
-        nameDuplicateIndexSet={nameDuplicateRowIndices}
-        redundantColumns={redundantColumns}
-        onRowNavigate={handleScrollToDuplicateRow}
-        className="border-b"
-      />
       <div className="flex-1 min-h-0">
         <Table
           key={`comparison-table-${side}-${debouncedFilterKey}-${rows.length}`}

@@ -22,8 +22,9 @@ import {
 } from "@/components/ui/dialog";
 import { Button } from "@/components/ui/button";
 import { Field, FieldContent, FieldLabel } from "@/components/ui/field";
-import { ScrollArea } from "@radix-ui/react-scroll-area";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
+import { DataQualityAlert } from "@/components/database/data-quality-alert";
 import { ComparisonTable } from "@/components/database/comparison-table";
 import { DEFAULT_TABLE_LIMIT } from "@/lib/constants/table-constants";
 import { categorizeColumns, getColumnsToDisplay, normalizeColumnName } from "@/lib/utils/table-column-utils";
@@ -469,36 +470,22 @@ export function TableComparisonView({
                       • {leftRelationships.length + rightRelationships.length} relationship{(leftRelationships.length + rightRelationships.length) > 1 ? 's' : ''}
                     </span>
                   )}
-                  {leftDataQuality.duplicateGroups.length > 0 && (
-                    <span className="text-amber-700">
-                      • Left duplicates: {leftDataQuality.duplicateIndexSet.size}
-                    </span>
-                  )}
-                  {rightDataQuality.duplicateGroups.length > 0 && (
-                    <span className="text-amber-700">
-                      • Right duplicates: {rightDataQuality.duplicateIndexSet.size}
-                    </span>
-                  )}
-                  {leftDataQuality.redundantColumns.length > 0 && (
-                    <span className="text-amber-700">
-                      • Left redundant cols: {leftDataQuality.redundantColumns.length}
-                    </span>
-                  )}
-                  {rightDataQuality.redundantColumns.length > 0 && (
-                    <span className="text-amber-700">
-                      • Right redundant cols: {rightDataQuality.redundantColumns.length}
-                    </span>
-                  )}
-                  {leftDataQuality.nameDuplicateGroups.length > 0 && (
-                    <span className="text-amber-700">
-                      • Left Oid trùng tên: {leftDataQuality.nameDuplicateIndexSet.size}
-                    </span>
-                  )}
-                  {rightDataQuality.nameDuplicateGroups.length > 0 && (
-                    <span className="text-amber-700">
-                      • Right Oid trùng tên: {rightDataQuality.nameDuplicateIndexSet.size}
-                    </span>
-                  )}
+                  <DataQualityAlert
+                    duplicateGroups={leftDataQuality.duplicateGroups}
+                    duplicateIndexSet={leftDataQuality.duplicateIndexSet}
+                    nameDuplicateGroups={leftDataQuality.nameDuplicateGroups}
+                    nameDuplicateIndexSet={leftDataQuality.nameDuplicateIndexSet}
+                    redundantColumns={leftDataQuality.redundantColumns}
+                    label="Left Data Quality"
+                  />
+                  <DataQualityAlert
+                    duplicateGroups={rightDataQuality.duplicateGroups}
+                    duplicateIndexSet={rightDataQuality.duplicateIndexSet}
+                    nameDuplicateGroups={rightDataQuality.nameDuplicateGroups}
+                    nameDuplicateIndexSet={rightDataQuality.nameDuplicateIndexSet}
+                    redundantColumns={rightDataQuality.redundantColumns}
+                    label="Right Data Quality"
+                  />
                 </div>
                 
               </div>
