@@ -19,10 +19,9 @@ import type { UseTableFiltersReturn } from "@/lib/hooks/use-table-filters";
 import { normalizeColumnName } from "@/lib/utils/table-column-utils";
 import { logger } from "@/lib/logger";
 import { ReferenceColumnFilter } from "../filters";
-import { TableRelationshipsDialog } from "../tables/table-relationships-dialog";
 import type { ForeignKeyInfo } from "@/lib/hooks/use-database-query";
 import type { DuplicateGroup } from "@/lib/utils/data-quality-utils";
-import { DataQualityAlert } from "../shared";
+import { DataQualityAlert, TableRelationshipsDialog } from "../shared";
 import { TABLE_LIMIT_OPTIONS } from "@/lib/constants/table-constants";
 
 type ComparisonResultMap = Map<number, {

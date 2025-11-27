@@ -10,7 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import type { DatabaseName } from "@/lib/db-config";
 import { getDatabaseConfig } from "@/lib/db-config";
 import { logger } from "@/lib/logger";
-import { TableDataView } from "./table-data-view";
+import { TableDataView } from "../tables/table-data-view";
 import {
   Dialog,
   DialogContent,

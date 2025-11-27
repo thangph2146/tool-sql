@@ -6,7 +6,7 @@ import type { DatabaseName } from '@/lib/db-config';
 import { DatabaseCard } from './database-card';
 import { DatabaseHeader } from './database-header';
 import { TableComparisonView } from '../comparison';
-import { SelectedTablesBanner } from '../shared/selected-tables-banner';
+import { SelectedTablesBanner } from '../shared';
 
 export function DbConnectionStatus() {
   // Memoize enabled databases from config
