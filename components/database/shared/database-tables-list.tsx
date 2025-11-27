@@ -1,7 +1,7 @@
 "use client";
 
-import { useMemo, useState } from "react";
-import { Table, Loader2, RefreshCw, Filter, XCircle, GitCompare } from "lucide-react";
+import { useMemo, useState, useCallback, useEffect } from "react";
+import { Table, Loader2, RefreshCw, Filter, XCircle, GitCompare, AlertCircle, CheckCircle2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
@@ -11,6 +11,7 @@ import type { DatabaseName } from "@/lib/db-config";
 import { getDatabaseConfig } from "@/lib/db-config";
 import { logger } from "@/lib/logger";
 import { TableDataView } from "../tables/table-data-view";
+import { useTestTable } from "@/lib/hooks/use-database-query";
 import {
   Dialog,
   DialogContent,
@@ -50,6 +51,12 @@ export function DatabaseTablesList({
     table: string;
   } | null>(null);
   const [filterText, setFilterText] = useState("");
+  // Track tables that have errors
+  const [errorTables, setErrorTables] = useState<Set<string>>(new Set());
+  // Track table status: 'idle' | 'testing' | 'success' | 'error'
+  const [tableStatuses, setTableStatuses] = useState<Map<string, 'idle' | 'testing' | 'success' | 'error'>>(new Map());
+  // Track which tables are being tested
+  const [testingTables, setTestingTables] = useState<Set<string>>(new Set());
 
   // Get database config to display actual database name
   const dbConfig = useMemo(
@@ -93,6 +100,15 @@ export function DatabaseTablesList({
       schema,
       table,
     }, 'TABLE_LIST');
+    // Clear error state when user retries to view the table
+    const tableKey = `${schema}.${table}`;
+    if (errorTables.has(tableKey)) {
+      setErrorTables((prev) => {
+        const newSet = new Set(prev);
+        newSet.delete(tableKey);
+        return newSet;
+      });
+    }
     setSelectedTable({ schema, table });
   };
 
@@ -103,6 +119,106 @@ export function DatabaseTablesList({
   const handleClearFilter = () => {
     setFilterText("");
   };
+
+  // Handle table error from TableDataView
+  const handleTableError = useCallback((schema: string, table: string) => {
+    const tableKey = `${schema}.${table}`;
+    setErrorTables((prev) => new Set(prev).add(tableKey));
+    logger.warn('Table error detected', {
+      database: databaseName,
+      schema,
+      table,
+    }, 'TABLE_LIST');
+  }, [databaseName]);
+
+  // Check if a table has an error
+  const hasTableError = useCallback((schema: string, table: string) => {
+    const tableKey = `${schema}.${table}`;
+    return errorTables.has(tableKey);
+  }, [errorTables]);
+
+  // Test a single table
+  const testTable = useCallback((schema: string, table: string) => {
+    const tableKey = `${schema}.${table}`;
+    if (testingTables.has(tableKey)) return; // Already testing
+    
+    setTestingTables((prev) => new Set(prev).add(tableKey));
+    setTableStatuses((prev) => {
+      const newMap = new Map(prev);
+      newMap.set(tableKey, 'testing');
+      return newMap;
+    });
+  }, [testingTables]);
+
+  // Component to test individual table using API route
+  function TableTester({ schema, table }: { schema: string; table: string }) {
+    const tableKey = `${schema}.${table}`;
+    const isTesting = testingTables.has(tableKey);
+    
+    const { data, error, isLoading } = useTestTable(
+      databaseName,
+      schema,
+      table,
+      isTesting // Only enable when testing
+    );
+
+    useEffect(() => {
+      if (!isTesting) return;
+      
+      if (error) {
+        setTableStatuses((prev) => {
+          const newMap = new Map(prev);
+          newMap.set(tableKey, 'error');
+          return newMap;
+        });
+        setErrorTables((prev) => new Set(prev).add(tableKey));
+        setTestingTables((prev) => {
+          const newSet = new Set(prev);
+          newSet.delete(tableKey);
+          return newSet;
+        });
+      } else if (data && !isLoading) {
+        if (data.success && data.data.accessible) {
+          setTableStatuses((prev) => {
+            const newMap = new Map(prev);
+            newMap.set(tableKey, 'success');
+            return newMap;
+          });
+          // Clear error if table is now working
+          setErrorTables((prev) => {
+            if (prev.has(tableKey)) {
+              const newSet = new Set(prev);
+              newSet.delete(tableKey);
+              return newSet;
+            }
+            return prev;
+          });
+        } else {
+          setTableStatuses((prev) => {
+            const newMap = new Map(prev);
+            newMap.set(tableKey, 'error');
+            return newMap;
+          });
+          setErrorTables((prev) => new Set(prev).add(tableKey));
+        }
+        setTestingTables((prev) => {
+          const newSet = new Set(prev);
+          newSet.delete(tableKey);
+          return newSet;
+        });
+      }
+    }, [data, error, isLoading, isTesting, tableKey]);
+
+    return null; // This component doesn't render anything
+  }
+
+  // Test all tables
+  const testAllTables = useCallback(() => {
+    if (!tables) return;
+    tables.forEach((table) => {
+      testTable(table.TABLE_SCHEMA, table.TABLE_NAME);
+    });
+  }, [tables, testTable]);
 
   return (
     <div className="mt-4 pt-4">
@@ -121,15 +237,27 @@ export function DatabaseTablesList({
         </div>
         <div className="flex items-center gap-2">
           {tables && !isLoading && (
-            <Button
-              onClick={onRefresh}
-              variant="ghost"
-              size="sm"
-              title="Refresh tables list"
-            >
-              <RefreshCw />
-              Refresh
-            </Button>
+            <>
+              <Button
+                onClick={testAllTables}
+                variant="ghost"
+                size="sm"
+                title="Test all tables"
+                disabled={testingTables.size > 0}
+              >
+                <Loader2 className={`h-4 w-4 ${testingTables.size > 0 ? 'animate-spin' : ''}`} />
+                <span className="hidden sm:inline">Test All</span>
+              </Button>
+              <Button
+                onClick={onRefresh}
+                variant="ghost"
+                size="sm"
+                title="Refresh tables list"
+              >
+                <RefreshCw />
+                Refresh
+              </Button>
+            </>
           )}
           {!tables && !isLoading && (
             <Button onClick={onRefresh} variant="ghost" size="sm">
@@ -189,28 +317,62 @@ export function DatabaseTablesList({
                     selectedForComparison?.right?.schema === table.TABLE_SCHEMA &&
                     selectedForComparison?.right?.table === table.TABLE_NAME;
                   const isSelected = isSelectedLeft || isSelectedRight;
+                  const hasError = hasTableError(table.TABLE_SCHEMA, table.TABLE_NAME);
+                  const tableKey = `${table.TABLE_SCHEMA}.${table.TABLE_NAME}`;
+                  const status = tableStatuses.get(tableKey) || 'idle';
+                  const isTesting = status === 'testing';
+                  const isSuccess = status === 'success';
 
                   return (
                     <div
-                      key={`${table.TABLE_SCHEMA}.${table.TABLE_NAME}`}
+                      key={tableKey}
                       className={`flex items-center gap-2 p-2 rounded-md border transition-colors group ${
-                        isSelectedLeft
-                          ? "bg-blue-500/10 border-blue-500/50 hover:bg-blue-500/20"
-                          : isSelectedRight
-                            ? "bg-green-500/10 border-green-500/50 hover:bg-green-500/20"
-                            : "bg-background border-border hover:bg-accent hover:border-primary/50"
+                        hasError
+                          ? "bg-red-50 dark:bg-red-950/20 border-red-300 dark:border-red-800 hover:bg-red-100 dark:hover:bg-red-950/30"
+                          : isSelectedLeft
+                            ? "bg-blue-500/10 border-blue-500/50 hover:bg-blue-500/20"
+                            : isSelectedRight
+                              ? "bg-green-500/10 border-green-500/50 hover:bg-green-500/20"
+                              : "bg-background border-border hover:bg-accent hover:border-primary/50"
                       }`}
                     >
                     <div
-                      onClick={() =>
-                        handleTableClick(table.TABLE_SCHEMA, table.TABLE_NAME)
-                      }
+                      onClick={() => {
+                        handleTableClick(table.TABLE_SCHEMA, table.TABLE_NAME);
+                      }}
+                      onMouseEnter={() => {
+                        // Auto-test table on hover if not tested yet
+                        if (status === 'idle' && !isTesting) {
+                          testTable(table.TABLE_SCHEMA, table.TABLE_NAME);
+                        }
+                      }}
                       className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer"
-                      title={`Click to view data: ${table.TABLE_SCHEMA}.${table.TABLE_NAME} in ${databaseName}`}
+                      title={
+                        hasError
+                          ? `Error loading data from ${table.TABLE_SCHEMA}.${table.TABLE_NAME}. Click to retry.`
+                          : isTesting
+                            ? `Testing ${table.TABLE_SCHEMA}.${table.TABLE_NAME}...`
+                            : isSuccess
+                              ? `${table.TABLE_SCHEMA}.${table.TABLE_NAME} is working. Click to view.`
+                              : `Click to test and view data: ${table.TABLE_SCHEMA}.${table.TABLE_NAME} in ${databaseName}`
+                      }
                     >
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2">
-                          <p className="text-xs font-medium text-foreground truncate">
+                          {isTesting && (
+                            <Loader2 className="h-3 w-3 text-blue-500 animate-spin flex-shrink-0" />
+                          )}
+                          {hasError && !isTesting && (
+                            <AlertCircle className="h-3 w-3 text-red-500 flex-shrink-0" />
+                          )}
+                          {isSuccess && !hasError && !isTesting && (
+                            <CheckCircle2 className="h-3 w-3 text-green-500 flex-shrink-0" />
+                          )}
+                          <p className={`text-xs font-medium truncate ${
+                            hasError 
+                              ? "text-red-700 dark:text-red-300" 
+                              : "text-foreground"
+                          }`}>
                             {table.TABLE_NAME}
                           </p>
                           {isSelected && (
@@ -226,11 +388,17 @@ export function DatabaseTablesList({
                             </Badge>
                           )}
                         </div>
-                        <p className="text-xs text-muted-foreground truncate">
+                        <p className={`text-xs truncate ${
+                          hasError 
+                            ? "text-red-600 dark:text-red-400" 
+                            : "text-muted-foreground"
+                        }`}>
                           Schema: {table.TABLE_SCHEMA}
                         </p>
                       </div>
                     </div>
+                    {/* Hidden component to test table */}
+                    <TableTester schema={table.TABLE_SCHEMA} table={table.TABLE_NAME} />
                     {onCompareTable && (
                       <Button
                         variant="ghost"
@@ -320,6 +488,7 @@ export function DatabaseTablesList({
                 schemaName={selectedTable.schema}
                 tableName={selectedTable.table}
                 onTableChange={handleTableClick}
+                onError={handleTableError}
               />
             </>
           )}

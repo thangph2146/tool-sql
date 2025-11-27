@@ -11,6 +11,25 @@ import {
 // Re-export DatabaseName for backward compatibility
 export type { DatabaseName } from './db-config';
 
+/**
+ * Escape SQL Server identifier (table name, schema name, column name)
+ * Escapes closing brackets by doubling them for use in [bracket] notation
+ * Also removes leading/trailing single quotes if present (from URL decoding)
+ */
+export function escapeSqlIdentifier(identifier: string): string {
+  if (!identifier) return identifier;
+  
+  // Remove leading and trailing single quotes if present (may come from URL decoding)
+  let cleaned = identifier.trim();
+  if ((cleaned.startsWith("'") && cleaned.endsWith("'")) || 
+      (cleaned.startsWith('"') && cleaned.endsWith('"'))) {
+    cleaned = cleaned.slice(1, -1);
+  }
+  
+  // Escape closing brackets by doubling them for use in [bracket] notation
+  return cleaned.replace(/]/g, ']]');
+}
+
 export interface ServerInfo {
   ServerName: string;
   Version: string;
@@ -595,9 +614,13 @@ export async function getTableRowCount(
   tableName: string
 ): Promise<number> {
   try {
+    // Escape schema and table names for SQL Server
+    const escapedSchema = escapeSqlIdentifier(schemaName);
+    const escapedTable = escapeSqlIdentifier(tableName);
+    
     const result = await query<{ row_count: number }>(databaseName, `
       SELECT COUNT(*) as row_count
-      FROM [${schemaName}].[${tableName}]
+      FROM [${escapedSchema}].[${escapedTable}]
     `);
     return result.recordset[0]?.row_count || 0;
   } catch (error) {
@@ -643,10 +666,14 @@ export async function getTableData(
       }, 'DB_TABLE_DATA');
     }
 
+    // Escape schema and table names for SQL Server
+    const escapedSchema = escapeSqlIdentifier(schemaName);
+    const escapedTable = escapeSqlIdentifier(tableName);
+
     // Get total row count
     const countResult = await query<{ total: number }>(databaseName, `
       SELECT COUNT(*) as total
-      FROM [${schemaName}].[${tableName}]
+      FROM [${escapedSchema}].[${escapedTable}]
     `);
     const totalRows = countResult.recordset[0]?.total || 0;
 
@@ -659,7 +686,7 @@ export async function getTableData(
       SELECT TOP ${limit} *
       FROM (
         SELECT *, ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) as rn
-        FROM [${schemaName}].[${tableName}]
+        FROM [${escapedSchema}].[${escapedTable}]
       ) AS t
       WHERE t.rn > ${offset}
       ORDER BY t.rn
@@ -751,8 +778,8 @@ export async function getTableForeignKeys(
     }
 
     // Escape schema and table names for SQL injection prevention
-    const escapedSchema = schemaName.replace(/]/g, ']]');
-    const escapedTable = tableName.replace(/]/g, ']]');
+    const escapedSchema = escapeSqlIdentifier(schemaName).replace(/'/g, "''");
+    const escapedTable = escapeSqlIdentifier(tableName).replace(/'/g, "''");
     
     const result = await query<ForeignKeyInfo>(databaseName, `
       SELECT 
@@ -824,8 +851,8 @@ export async function getTableReferencedBy(
     }
 
     // Escape schema and table names for SQL injection prevention
-    const escapedSchema = schemaName.replace(/]/g, ']]');
-    const escapedTable = tableName.replace(/]/g, ']]');
+    const escapedSchema = escapeSqlIdentifier(schemaName).replace(/'/g, "''");
+    const escapedTable = escapeSqlIdentifier(tableName).replace(/'/g, "''");
     
     const result = await query<ForeignKeyInfo>(databaseName, `
       SELECT 
@@ -886,9 +913,9 @@ async function findFullNameExpression(
 ): Promise<string | null> {
   try {
     // Escape schema, table, and column names for SQL injection prevention
-    const escapedSchema = schemaName.replace(/]/g, ']]');
-    const escapedTable = tableName.replace(/]/g, ']]');
-    const escapedExcludeColumn = excludeColumn.replace(/]/g, ']]');
+    const escapedSchema = escapeSqlIdentifier(schemaName).replace(/'/g, "''");
+    const escapedTable = escapeSqlIdentifier(tableName).replace(/'/g, "''");
+    const escapedExcludeColumn = escapeSqlIdentifier(excludeColumn).replace(/'/g, "''");
     
     // Get all columns from the referenced table
     const columnsResult = await query<{ COLUMN_NAME: string }>(databaseName, `
@@ -1056,9 +1083,9 @@ async function findDisplayColumn(
     ];
 
     // Escape schema, table, and column names for SQL injection prevention
-    const escapedSchema = schemaName.replace(/]/g, ']]');
-    const escapedTable = tableName.replace(/]/g, ']]');
-    const escapedExcludeColumn = excludeColumn.replace(/]/g, ']]');
+    const escapedSchema = escapeSqlIdentifier(schemaName).replace(/'/g, "''");
+    const escapedTable = escapeSqlIdentifier(tableName).replace(/'/g, "''");
+    const escapedExcludeColumn = escapeSqlIdentifier(excludeColumn).replace(/'/g, "''");
     
     // Get all columns from the referenced table
     const columnsResult = await query<{ COLUMN_NAME: string }>(databaseName, `
@@ -1141,8 +1168,8 @@ export async function getTableDataWithReferences(
     const foreignKeys = await getTableForeignKeys(databaseName, schemaName, tableName, flowId);
 
     // Escape schema and table names for count query
-    const escapedCountSchema = schemaName.replace(/]/g, ']]');
-    const escapedCountTable = tableName.replace(/]/g, ']]');
+    const escapedCountSchema = escapeSqlIdentifier(schemaName);
+    const escapedCountTable = escapeSqlIdentifier(tableName);
 
     // Get total row count
     const countResult = await query<{ total: number }>(databaseName, `
@@ -1168,11 +1195,15 @@ export async function getTableDataWithReferences(
     }
 
     // First, get all columns from the table to maintain original order
+    // Escape for use in N'string' format (escape single quotes)
+    const escapedSchemaForString = escapeSqlIdentifier(schemaName).replace(/'/g, "''");
+    const escapedTableForString = escapeSqlIdentifier(tableName).replace(/'/g, "''");
+    
     const allColumnsResult = await query<{ COLUMN_NAME: string }>(databaseName, `
       SELECT COLUMN_NAME
       FROM INFORMATION_SCHEMA.COLUMNS
-      WHERE TABLE_SCHEMA = N'${schemaName.replace(/'/g, "''")}'
-        AND TABLE_NAME = N'${tableName.replace(/'/g, "''")}'
+      WHERE TABLE_SCHEMA = N'${escapedSchemaForString}'
+        AND TABLE_NAME = N'${escapedTableForString}'
       ORDER BY ORDINAL_POSITION
     `);
     
@@ -1187,8 +1218,8 @@ export async function getTableDataWithReferences(
     const joinClauses: string[] = [];
     
     // Escape schema and table names
-    const escapedSchema = schemaName.replace(/]/g, ']]');
-    const escapedTable = tableName.replace(/]/g, ']]');
+    const escapedSchema = escapeSqlIdentifier(schemaName);
+    const escapedTable = escapeSqlIdentifier(tableName);
     
     // Process each foreign key to create joins first
     for (let i = 0; i < foreignKeys.length; i++) {
@@ -1325,8 +1356,8 @@ export async function getTableDataWithReferences(
     }
 
     // Escape schema and table names for main query
-    const escapedMainSchema = schemaName.replace(/]/g, ']]');
-    const escapedMainTable = tableName.replace(/]/g, ']]');
+    const escapedMainSchema = escapeSqlIdentifier(schemaName);
+    const escapedMainTable = escapeSqlIdentifier(tableName);
     
     // Build the query with joins
     const selectClause = selectColumns.join(', ');

@@ -109,6 +109,9 @@ export function TableRelationshipsDialog({
     const targetSchema = isOutgoing ? firstRel.PK_SCHEMA : firstRel.FK_SCHEMA;
     const targetTable = isOutgoing ? firstRel.PK_TABLE : firstRel.FK_TABLE;
     const isExpanded = expandedTables.has(tableKey);
+    
+    // Xác định bảng đang reference (bảng hiện tại)
+    const currentTableKey = `${schemaName}.${tableName}`;
 
     return (
       <div key={tableKey} className="space-y-3">
@@ -150,12 +153,21 @@ export function TableRelationshipsDialog({
                       <span className="font-medium text-sm">{rel.FK_NAME}</span>
                     </div>
                     <div className="text-sm space-y-1">
+                      {/* Hiển thị bảng đang reference (dbo) trước */}
+                      <div className="flex items-center gap-2">
+                        <span className="text-muted-foreground">Table:</span>
+                        <Badge variant="outline">
+                          {currentTableKey}
+                        </Badge>
+                      </div>
+                      {/* Sau đó mới đến FK */}
                       <div className="flex items-center gap-2">
                         <span className="text-muted-foreground">FK:</span>
                         <Badge variant="outline">
                           {rel.FK_SCHEMA}.{rel.FK_TABLE}.{rel.FK_COLUMN}
                         </Badge>
                       </div>
+                      {/* Cuối cùng là PK */}
                       <div className="flex items-center gap-2">
                         <span className="text-muted-foreground">PK:</span>
                         <Badge variant="outline">

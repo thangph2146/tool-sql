@@ -273,3 +273,43 @@ export function useTableRelationships(
   });
 }
 
+interface TestTableResponse {
+  success: boolean;
+  message: string;
+  data: {
+    database: DatabaseName;
+    schema: string;
+    table: string;
+    accessible: boolean;
+    hasData: boolean;
+    columnsCount: number;
+  };
+  error?: string;
+}
+
+/**
+ * Hook to test if a table is accessible
+ */
+export function useTestTable(
+  databaseName: DatabaseName | undefined,
+  schemaName: string | undefined,
+  tableName: string | undefined,
+  enabled: boolean = true
+) {
+  return useQuery({
+    queryKey: [...databaseQueryKeys.all, 'test-table', databaseName, schemaName, tableName] as const,
+    queryFn: async () => {
+      if (!databaseName || !schemaName || !tableName) {
+        throw new Error('Database, schema, and table are required');
+      }
+      const response = await axiosClient.get<TestTableResponse>(
+        `/api/db/test-table?database=${databaseName}&schema=${encodeURIComponent(schemaName)}&table=${encodeURIComponent(tableName)}`
+      );
+      return response.data;
+    },
+    enabled: enabled && !!databaseName && !!schemaName && !!tableName,
+    staleTime: 5 * 60 * 1000, // Consider test result fresh for 5 minutes
+    retry: 1, // Only retry once on failure
+  });
+}
+

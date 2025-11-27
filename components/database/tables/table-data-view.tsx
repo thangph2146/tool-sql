@@ -41,6 +41,7 @@ interface TableDataViewProps {
   tableName: string;
   onClose?: () => void;
   onTableChange?: (schema: string, table: string) => void;
+  onError?: (schema: string, table: string, error: Error | unknown) => void;
 }
 
 export function TableDataView({
@@ -48,6 +49,7 @@ export function TableDataView({
   schemaName,
   tableName,
   onTableChange,
+  onError,
 }: TableDataViewProps) {
   const [limit, setLimit] = useState(DEFAULT_TABLE_LIMIT);
   const [includeReferences, setIncludeReferences] = useState(true);
@@ -250,12 +252,40 @@ export function TableDataView({
     flowLog,
   ]);
 
-  // Log errors
+  // Log errors - only log when component is mounted and error is new
+  const errorLoggedRef = useRef<string | null>(null);
+  const isMountedRef = useRef(true);
+  
   useEffect(() => {
-    if (error && flowLog) {
-      flowLog.error("Error loading table data", error);
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+      errorLoggedRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    // Only log error if component is mounted and error is new
+    if (error && flowLog && isMountedRef.current) {
+      // Create a unique key for this error to avoid logging the same error multiple times
+      const errorKey = error instanceof Error 
+        ? `${error.message}-${error.stack?.substring(0, 50)}` 
+        : String(error);
+      
+      // Only log if this is a new error (different from the last logged one)
+      if (errorLoggedRef.current !== errorKey) {
+        errorLoggedRef.current = errorKey;
+        flowLog.error("Error loading table data", error);
+        // Notify parent component about the error
+        if (onError) {
+          onError(schemaName, tableName, error);
+        }
+      }
+    } else if (!error && isMountedRef.current) {
+      // Reset error log tracking when error is cleared
+      errorLoggedRef.current = null;
     }
-  }, [error, flowLog]);
+  }, [error, flowLog, schemaName, tableName, onError]);
 
   // Create a debounced filter key for forcing re-render when debounced filters change
   const debouncedFilterKey = useMemo(() => {
