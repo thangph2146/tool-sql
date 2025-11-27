@@ -8,7 +8,7 @@ import type { DatabaseName } from '@/lib/db-config';
 import { getDatabaseConfig } from '@/lib/db-config';
 import { useDatabaseConnection, useDatabaseTables, useTestConnection, useFetchTables } from '@/lib/hooks/use-database-query';
 import { DatabaseServerInfo } from './database-server-info';
-import { DatabaseTablesList } from '../tables';
+import { DatabaseTablesList } from '../shared';
 import { DatabaseErrorDisplay } from './database-error-display';
 
 interface DatabaseCardProps {
