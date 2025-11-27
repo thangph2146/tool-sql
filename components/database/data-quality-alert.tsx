@@ -1,6 +1,5 @@
 "use client";
 
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
 import { cn } from "@/lib/utils";
 import type { DuplicateGroup } from "@/lib/utils/data-quality-utils";
@@ -41,7 +40,7 @@ export function DataQualityAlert({
     if (!onRowNavigate) return null;
     return (
       <div className="flex flex-wrap gap-2">
-        {indices.slice(0, 5).map((rowIndex) => (
+        {indices.map((rowIndex) => (
           <Button
             key={`dup-btn-${rowIndex}`}
             variant="secondary"
@@ -52,19 +51,14 @@ export function DataQualityAlert({
             Dòng {rowIndex + 1}
           </Button>
         ))}
-        {indices.length > 5 && (
-          <span className="text-muted-foreground text-[10px]">
-            +{indices.length - 5} dòng khác
-          </span>
-        )}
       </div>
     );
   };
 
   return (
-    <ScrollArea
+    <div
       className={cn(
-        "border-y border-amber-200 bg-amber-50 text-amber-900 max-h-[10dvh]",
+        "border-y border-amber-200 bg-amber-50 text-amber-900",
         className
       )}
     >
@@ -76,7 +70,7 @@ export function DataQualityAlert({
             </div>
             <div>Có {duplicateCount} dòng có nội dung trùng lặp.</div>
             <ul className="list-disc list-inside space-y-2">
-              {duplicateGroups.slice(0, 3).map((group, index) => (
+              {duplicateGroups.map((group, index) => (
                 <li key={`dup-${group.signature}`} className="text-[11px] space-y-1">
                   Nhóm #{index + 1}: {group.indices.length} dòng giống nhau.{" "}
                   <span className="text-muted-foreground">
@@ -88,11 +82,6 @@ export function DataQualityAlert({
                   {onRowNavigate && renderGroupButtons(group.indices)}
                 </li>
               ))}
-              {duplicateGroups.length > 3 && (
-                <li className="text-[11px] text-muted-foreground">
-                  … {duplicateGroups.length - 3} nhóm khác
-                </li>
-              )}
             </ul>
           </div>
         )}
@@ -106,18 +95,13 @@ export function DataQualityAlert({
               Có {nameDuplicateCount} dòng có tên trùng nhau dựa trên cột Oid.
             </div>
             <ul className="list-disc list-inside space-y-2">
-              {nameDuplicateGroups.slice(0, 3).map((group, index) => (
+              {nameDuplicateGroups.map((group, index) => (
                 <li key={`name-dup-${group.signature}`} className="text-[11px] space-y-1">
                   Nhóm #{index + 1}: {group.displayValue || "N/A"} •{" "}
                   {group.indices.length} dòng.
                   {onRowNavigate && renderGroupButtons(group.indices)}
                 </li>
               ))}
-              {nameDuplicateGroups.length > 3 && (
-                <li className="text-[11px] text-muted-foreground">
-                  … {nameDuplicateGroups.length - 3} nhóm khác
-                </li>
-              )}
             </ul>
           </div>
         )}
@@ -130,14 +114,13 @@ export function DataQualityAlert({
             <div>
               Các cột luôn trống hoặc có cùng một giá trị:{" "}
               <span className="font-medium">
-                {redundantColumns.slice(0, 5).join(", ")}
+                {redundantColumns.join(", ")}
               </span>
-              {redundantColumns.length > 5 && "…"}
             </div>
           </div>
         )}
       </div>
-    </ScrollArea>
+    </div>
   );
 }
 

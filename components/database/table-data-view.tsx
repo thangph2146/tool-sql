@@ -11,6 +11,7 @@ import {
   Filter,
   XCircle,
   Link2,
+  AlertTriangle,
 } from "lucide-react";
 import type { DatabaseName } from "@/lib/db-config";
 import {
@@ -42,6 +43,8 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
+import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
 import {
   normalizeColumnName,
@@ -445,15 +448,6 @@ export function TableDataView({
         </div>
       </div>
 
-      <DataQualityAlert
-        duplicateGroups={dataQuality.duplicateGroups}
-        duplicateIndexSet={dataQuality.duplicateIndexSet}
-        nameDuplicateGroups={dataQuality.nameDuplicateGroups}
-        nameDuplicateIndexSet={dataQuality.nameDuplicateIndexSet}
-        redundantColumns={dataQuality.redundantColumns}
-        onRowNavigate={handleScrollToRow}
-      />
-
       {/* Content */}
       <div className="flex-1 overflow-hidden flex flex-col min-h-0 max-h-full">
         {isLoading ? (
@@ -479,35 +473,76 @@ export function TableDataView({
           <>
             {/* Filter Controls */}
             <div className="border-b border-border p-2 flex items-center justify-between gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => {
-                  const newShowFilters = !showFilters;
-                  flowLog?.debug(
-                    `${
-                      newShowFilters ? "Showing" : "Hiding"
-                    } filters for table: ${schemaName}.${tableName}`,
-                    {
-                      database: databaseName,
-                      schema: schemaName,
-                      table: tableName,
-                      showFilters: newShowFilters,
-                      activeFilterCount,
-                    }
-                  );
-                  setShowFilters(newShowFilters);
-                }}
-                className="gap-2"
-              >
-                <Filter className="h-4 w-4" />
-                <span className="hidden sm:inline">Filters</span>
-                {hasActiveFilters && (
-                  <span className="bg-primary text-primary-foreground rounded-full px-2 py-0.5 text-xs">
-                    {activeFilterCount}
-                  </span>
+              <div className="flex items-center gap-2">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => {
+                    const newShowFilters = !showFilters;
+                    flowLog?.debug(
+                      `${
+                        newShowFilters ? "Showing" : "Hiding"
+                      } filters for table: ${schemaName}.${tableName}`,
+                      {
+                        database: databaseName,
+                        schema: schemaName,
+                        table: tableName,
+                        showFilters: newShowFilters,
+                        activeFilterCount,
+                      }
+                    );
+                    setShowFilters(newShowFilters);
+                  }}
+                  className="gap-2"
+                >
+                  <Filter className="h-4 w-4" />
+                  <span className="hidden sm:inline">Filters</span>
+                  {hasActiveFilters && (
+                    <span className="bg-primary text-primary-foreground rounded-full px-2 py-0.5 text-xs">
+                      {activeFilterCount}
+                    </span>
+                  )}
+                </Button>
+                {(dataQuality.duplicateGroups.length > 0 ||
+                  dataQuality.nameDuplicateGroups.length > 0 ||
+                  dataQuality.redundantColumns.length > 0) && (
+                  <Popover>
+                    <PopoverTrigger asChild>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="gap-2 text-amber-700 border-amber-300 hover:bg-amber-50"
+                      >
+                        <AlertTriangle className="h-4 w-4" />
+                        <span className="hidden sm:inline">Data Quality</span>
+                        <Badge
+                          variant="secondary"
+                          className="bg-amber-500 text-white text-xs"
+                        >
+                          {dataQuality.duplicateIndexSet.size +
+                            dataQuality.nameDuplicateIndexSet.size +
+                            dataQuality.redundantColumns.length}
+                        </Badge>
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent
+                      align="start"
+                    >
+                      <ScrollArea className="max-h-[300px] overflow-y-auto">
+                        <DataQualityAlert
+                          duplicateGroups={dataQuality.duplicateGroups}
+                          duplicateIndexSet={dataQuality.duplicateIndexSet}
+                          nameDuplicateGroups={dataQuality.nameDuplicateGroups}
+                          nameDuplicateIndexSet={dataQuality.nameDuplicateIndexSet}
+                          redundantColumns={dataQuality.redundantColumns}
+                          onRowNavigate={handleScrollToRow}
+                          className="border-0 bg-transparent"
+                        />
+                      </ScrollArea>
+                    </PopoverContent>
+                  </Popover>
                 )}
-              </Button>
+              </div>
               {hasActiveFilters && (
                 <Button
                   variant="destructive"
@@ -522,7 +557,7 @@ export function TableDataView({
 
             <Table
               key={`table-${debouncedFilterKey}-${tableRows.length}`}
-              containerClassName="h-full max-h-[500px] max-w-[85vw] px-4"
+              containerClassName="h-full min-h-[300px] max-h-[500px] max-w-[85vw] px-4"
               style={{ height: "100%", maxHeight: "100%" }}
             >
               <TableHeader>

@@ -154,7 +154,7 @@ export function MultiSelectCombobox({
           </div>
         </PopoverTrigger>
         <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
-          <Command>
+          <Command className="overflow-visible">
             <CommandInput
               value={searchTerm}
               onValueChange={(value) => {
@@ -164,13 +164,13 @@ export function MultiSelectCombobox({
               placeholder={`Search ${column}...`}
               className="h-8 text-xs"
             />
-            <CommandList className="max-h-48">
+            <CommandList className="max-h-48 overflow-y-auto">
               <CommandEmpty className="text-xs">
                 {loading
                   ? "Loading options..."
                   : "No value found. Use the search box to enter custom text."}
               </CommandEmpty>
-              <CommandGroup>
+              <CommandGroup className="overflow-visible">
                 {normalizedOptions.map((option) => {
                   const isSelected = pendingValues.includes(option);
                   return (
