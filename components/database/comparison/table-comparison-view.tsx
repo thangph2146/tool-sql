@@ -50,12 +50,14 @@ export function TableComparisonView({
   asDialog = false,
   onTableChange,
 }: TableComparisonViewProps) {
-  const [limit, setLimit] = useState(DEFAULT_TABLE_LIMIT);
+  const [leftLimit, setLeftLimit] = useState(DEFAULT_TABLE_LIMIT);
+  const [rightLimit, setRightLimit] = useState(DEFAULT_TABLE_LIMIT);
   const [page] = useState(0);
   const [showColumnSelector] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
   const [includeReferences, setIncludeReferences] = useState(true);
-  const offset = page * limit;
+  const leftOffset = page * leftLimit;
+  const rightOffset = page * rightLimit;
 
   // Flow logging with key-based lifecycle (only when open)
   const comparisonKey = open
@@ -84,7 +86,8 @@ export function TableComparisonView({
         table: rightTable.tableName,
       },
       includeReferences,
-      limit,
+      leftLimit,
+      rightLimit,
       page,
     }),
     open
@@ -182,13 +185,13 @@ export function TableComparisonView({
   const leftTableFilters = useTableFilters();
   const rightTableFilters = useTableFilters();
 
-  // Fetch data for both tables
+  // Fetch data for both tables with separate limits
   const leftData = useTableData(
     leftTable.databaseName,
     leftTable.schemaName,
     leftTable.tableName,
-    limit,
-    offset,
+    leftLimit,
+    leftOffset,
     open, // Only fetch when dialog/view is open
     includeReferences,
     leftTableFilters.debouncedFilters
@@ -198,8 +201,8 @@ export function TableComparisonView({
     rightTable.databaseName,
     rightTable.schemaName,
     rightTable.tableName,
-    limit,
-    offset,
+    rightLimit,
+    rightOffset,
     open, // Only fetch when dialog/view is open
     includeReferences,
     rightTableFilters.debouncedFilters
@@ -222,12 +225,14 @@ export function TableComparisonView({
           totalRows: rightTableData.totalRows,
           columns: rightTableData.columns.length,
         },
-        offset,
-        limit,
+        leftOffset,
+        rightOffset,
+        leftLimit,
+        rightLimit,
         includeReferences,
       });
     }
-  }, [leftTableData, rightTableData, offset, limit, includeReferences, flowLog]);
+  }, [leftTableData, rightTableData, leftOffset, rightOffset, leftLimit, rightLimit, includeReferences, flowLog]);
 
   // Log errors and loading states
   useEffect(() => {
@@ -380,23 +385,27 @@ export function TableComparisonView({
 
       {/* Content */}
       <div className="flex-1 overflow-hidden flex flex-col min-h-0">
-        <ComparisonLoadingState
-          isLoading={isLoading}
-          loadingStates={{
-            leftData: leftData.isLoading,
-            rightData: rightData.isLoading,
-            leftRelationships: leftRelationshipsData?.isLoading ?? false,
-            rightRelationships: rightRelationshipsData?.isLoading ?? false,
-          }}
-          hasError={!!hasError}
-          errors={{
-            leftData: leftData.error,
-            rightData: rightData.error,
-            leftRelationships: leftRelationshipsData?.error,
-            rightRelationships: rightRelationshipsData?.error,
-          }}
-        />
-        {!isLoading && !hasError && leftTableData && rightTableData ? (
+        {/* Only show global loading state on initial load when both tables have no data */}
+        {!leftTableData && !rightTableData && (
+          <ComparisonLoadingState
+            isLoading={isLoading}
+            loadingStates={{
+              leftData: leftData.isLoading,
+              rightData: rightData.isLoading,
+              leftRelationships: leftRelationshipsData?.isLoading ?? false,
+              rightRelationships: rightRelationshipsData?.isLoading ?? false,
+            }}
+            hasError={!!hasError}
+            errors={{
+              leftData: leftData.error,
+              rightData: rightData.error,
+              leftRelationships: leftRelationshipsData?.error,
+              rightRelationships: rightRelationshipsData?.error,
+            }}
+          />
+        )}
+        {/* Show tables even if one is loading - each table manages its own loading overlay */}
+        {!hasError && (leftTableData || rightTableData) ? (
           <div className="flex-1 flex flex-col min-h-0">
             {/* Side by Side Tables */}
             <div className="flex-1 grid grid-cols-2 gap-0 min-h-0 overflow-hidden">
@@ -407,7 +416,7 @@ export function TableComparisonView({
                   schemaName={leftTable.schemaName}
                   tableName={leftTable.tableName}
                   columns={leftColumnsToDisplay}
-                  rows={leftTableData.rows}
+                  rows={leftTableData?.rows || []}
                   filters={leftTableFilters}
                   showFilters={showFilters}
                   onToggleFilters={() => setShowFilters(!showFilters)}
@@ -416,10 +425,11 @@ export function TableComparisonView({
                   side="left"
                   relationships={leftRelationships}
                   includeReferences={includeReferences}
-                  totalRows={leftTableData.totalRows}
-                  filteredRowCount={leftTableData.filteredRowCount}
-                  limit={limit}
-                  onLimitChange={setLimit}
+                  totalRows={leftTableData?.totalRows}
+                  filteredRowCount={leftTableData?.filteredRowCount}
+                  limit={leftLimit}
+                  onLimitChange={setLeftLimit}
+                  isLoading={leftData.isLoading}
                   onTableChange={onTableChange ? (schema, table) => onTableChange(leftTable.databaseName, schema, table) : undefined}
                   duplicateGroups={leftDataQuality.duplicateGroups}
                   duplicateIndexSet={leftDataQuality.duplicateIndexSet}
@@ -440,7 +450,7 @@ export function TableComparisonView({
                   schemaName={rightTable.schemaName}
                   tableName={rightTable.tableName}
                   columns={rightColumnsToDisplay}
-                  rows={rightTableData.rows}
+                  rows={rightTableData?.rows || []}
                   filters={rightTableFilters}
                   showFilters={showFilters}
                   onToggleFilters={() => setShowFilters(!showFilters)}
@@ -449,10 +459,11 @@ export function TableComparisonView({
                   side="right"
                   relationships={rightRelationships}
                   includeReferences={includeReferences}
-                  totalRows={rightTableData.totalRows}
-                  filteredRowCount={rightTableData.filteredRowCount}
-                  limit={limit}
-                  onLimitChange={setLimit}
+                  totalRows={rightTableData?.totalRows}
+                  filteredRowCount={rightTableData?.filteredRowCount}
+                  limit={rightLimit}
+                  onLimitChange={setRightLimit}
+                  isLoading={rightData.isLoading}
                   onTableChange={onTableChange ? (schema, table) => onTableChange(rightTable.databaseName, schema, table) : undefined}
                   duplicateGroups={rightDataQuality.duplicateGroups}
                   duplicateIndexSet={rightDataQuality.duplicateIndexSet}

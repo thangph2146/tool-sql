@@ -1,12 +1,18 @@
 "use client";
 
 import { useMemo, useRef, useState, useCallback, useEffect } from "react";
-import { Database, Filter, XCircle, Link2 } from "lucide-react";
+import { Database, Filter, XCircle, Link2, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
 import { InputGroup, InputGroupInput, InputGroupButton, InputGroupAddon } from "@/components/ui/input-group";
-import { Field, FieldContent } from "@/components/ui/field";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import { TableCell as TableCellComponent } from "../tables/table-cell";
 import { cn } from "@/lib/utils";
 import type { UseTableFiltersReturn } from "@/lib/hooks/use-table-filters";
@@ -45,6 +51,7 @@ interface ComparisonTableProps {
   filteredRowCount?: number;
   limit?: number;
   onLimitChange?: (limit: number) => void;
+  isLoading?: boolean;
   onTableChange?: (schema: string, table: string) => void;
   duplicateGroups?: DuplicateGroup[];
   duplicateIndexSet?: Set<number>;
@@ -72,6 +79,7 @@ export function ComparisonTable({
   filteredRowCount,
   limit,
   onLimitChange,
+  isLoading = false,
   onTableChange,
   duplicateGroups = [],
   duplicateIndexSet,
@@ -129,8 +137,8 @@ export function ComparisonTable({
     };
   }, []);
 
-  const handleLimitChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
-    const newLimit = parseInt(e.target.value, 10);
+  const handleLimitChange = useCallback((value: string) => {
+    const newLimit = parseInt(value, 10);
     onLimitChange?.(newLimit);
   }, [onLimitChange]);
 
@@ -160,6 +168,7 @@ export function ComparisonTable({
                 )}
               </span>
             )}
+            <br/>
             <DataQualityAlert
               duplicateGroups={duplicateGroups}
               duplicateIndexSet={duplicateRowIndices}
@@ -220,26 +229,39 @@ export function ComparisonTable({
               </Button>
             )}
             {limit !== undefined && onLimitChange && (
-              <Field orientation="horizontal" className="gap-2">
-                <FieldContent>
-                  <select
-                    value={limit}
-                    onChange={handleLimitChange}
-                    className="h-7 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                  >
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Rows:</span>
+                <Select
+                  value={String(limit)}
+                  onValueChange={handleLimitChange}
+                >
+                  <SelectTrigger size="sm" className="h-7 w-20 text-xs">
+                    <SelectValue />
+                  </SelectTrigger>
+                  <SelectContent>
                     {TABLE_LIMIT_OPTIONS.map((opt) => (
-                      <option key={opt} value={opt}>
+                      <SelectItem key={opt} value={String(opt)}>
                         {opt}
-                      </option>
+                      </SelectItem>
                     ))}
-                  </select>
-                </FieldContent>
-              </Field>
+                  </SelectContent>
+                </Select>
+              </div>
             )}
           </div>
         </div>
       </div>
-      <div className="flex-1 min-h-0">
+      <div className="flex-1 min-h-0 relative">
+        {isLoading && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80 backdrop-blur-sm">
+            <div className="flex flex-col items-center gap-2">
+              <Loader2 className="h-6 w-6 animate-spin text-primary" />
+              <span className="text-xs text-muted-foreground">
+                Loading {side} table...
+              </span>
+            </div>
+          </div>
+        )}
         <Table
           key={`comparison-table-${side}-${debouncedFilterKey}-${rows.length}`}
           containerClassName={containerClassName}
