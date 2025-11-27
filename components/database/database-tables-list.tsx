@@ -303,7 +303,7 @@ export function DatabaseTablesList({
         open={!!selectedTable}
         onOpenChange={(open) => !open && handleCloseTableData()}
       >
-        <DialogContent className="w-full p-0" showCloseButton={true}>
+        <DialogContent className="w-full  p-0" showCloseButton={true}>
           {selectedTable && (
             <>
               <DialogHeader className="sr-only">

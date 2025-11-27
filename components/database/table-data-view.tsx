@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo, useEffect } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -42,15 +42,18 @@ import {
   TableCell,
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
+import { cn } from "@/lib/utils";
 import {
   normalizeColumnName,
   filterHiddenColumns,
 } from "@/lib/utils/table-column-utils";
+import { analyzeDataQuality } from "@/lib/utils/data-quality-utils";
 import { sortRelationships } from "@/lib/utils/relationship-utils";
 import { useFlowLoggerWithKey } from "@/lib/hooks/use-flow-logger";
 import { FLOW_NAMES } from "@/lib/constants/flow-constants";
 import { ReferenceColumnFilter } from "@/components/database/reference-column-filter";
 import { TableRelationshipsDialog } from "@/components/database/table-relationships-dialog";
+import { DataQualityAlert } from "@/components/database/data-quality-alert";
 
 interface TableDataViewProps {
   databaseName: DatabaseName;
@@ -155,8 +158,48 @@ export function TableDataView({
   );
 
   const tableData = data?.data;
-  const tableRows = tableData?.rows ?? [];
+  const tableRows = useMemo(
+    () => (tableData?.rows ? [...tableData.rows] : []),
+    [tableData]
+  );
   const filteredRowCount = tableData?.filteredRowCount ?? tableRows.length;
+
+  const visibleColumns = useMemo(() => {
+    if (!tableData?.columns) return [];
+    return filterHiddenColumns(tableData.columns);
+  }, [tableData]);
+
+  const dataQuality = useMemo(
+    () =>
+      analyzeDataQuality(tableRows, visibleColumns, {
+        nameColumns: ["Oid"],
+      }),
+    [tableRows, visibleColumns]
+  );
+  const rowRefs = useRef<Record<number, HTMLTableRowElement | null>>({});
+  const [highlightedRow, setHighlightedRow] = useState<number | null>(null);
+  const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const handleScrollToRow = useCallback((index: number) => {
+    const rowEl = rowRefs.current[index];
+    if (rowEl) {
+      rowEl.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlightedRow(index);
+      if (highlightTimeoutRef.current) {
+        clearTimeout(highlightTimeoutRef.current);
+      }
+      highlightTimeoutRef.current = setTimeout(() => {
+        setHighlightedRow(null);
+      }, 2000);
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimeoutRef.current) {
+        clearTimeout(highlightTimeoutRef.current);
+      }
+    };
+  }, []);
 
   // Log when table data is loaded
   useEffect(() => {
@@ -344,7 +387,7 @@ export function TableDataView({
               Database: {databaseName}
               {tableData && (
                 <span className="ml-2">
-                  • {tableData.columns.length} columns
+                  • {visibleColumns.length} columns
                 </span>
               )}
               {relationships.length > 0 && (
@@ -401,6 +444,15 @@ export function TableDataView({
           </Field>
         </div>
       </div>
+
+      <DataQualityAlert
+        duplicateGroups={dataQuality.duplicateGroups}
+        duplicateIndexSet={dataQuality.duplicateIndexSet}
+        nameDuplicateGroups={dataQuality.nameDuplicateGroups}
+        nameDuplicateIndexSet={dataQuality.nameDuplicateIndexSet}
+        redundantColumns={dataQuality.redundantColumns}
+        onRowNavigate={handleScrollToRow}
+      />
 
       {/* Content */}
       <div className="flex-1 overflow-hidden flex flex-col min-h-0 max-h-full">
@@ -475,7 +527,7 @@ export function TableDataView({
             >
               <TableHeader>
                 <TableRow>
-                  {filterHiddenColumns(tableData.columns).map((column) => {
+                  {visibleColumns.map((column) => {
                     // Check if this column has a relationship
                     const hasRelationship =
                       includeReferences &&
@@ -576,9 +628,22 @@ export function TableDataView({
                       row["Oid"] ??
                       (firstColumn ? row[firstColumn] : undefined) ??
                       `${rowIndex}-${debouncedFilterKey}`;
+                    const isDuplicateRow = dataQuality.duplicateIndexSet.has(rowIndex);
+                    const isNameDuplicate = dataQuality.nameDuplicateIndexSet.has(rowIndex);
+                    const isHighlighted = highlightedRow === rowIndex;
                     return (
-                      <TableRow key={String(uniqueKey)}>
-                        {filterHiddenColumns(tableData.columns).map(
+                      <TableRow
+                        key={String(uniqueKey)}
+                        ref={(el) => {
+                          rowRefs.current[rowIndex] = el;
+                        }}
+                        className={cn(
+                          (isDuplicateRow || isNameDuplicate) &&
+                            "ring-1 ring-amber-400 bg-amber-50/60",
+                          isHighlighted && "ring-2 ring-primary"
+                        )}
+                      >
+                      {visibleColumns.map(
                           (column) => (
                             <TableCell key={column} className="max-w-xs">
                               <TableCellComponent value={row[column]} />
@@ -591,7 +656,7 @@ export function TableDataView({
                 ) : (
                   <TableRow>
                     <TableCell
-                      colSpan={filterHiddenColumns(tableData.columns).length}
+                      colSpan={visibleColumns.length}
                       className="text-center py-8 text-muted-foreground"
                     >
                       {hasActiveFilters

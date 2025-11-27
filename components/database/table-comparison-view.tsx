@@ -28,6 +28,7 @@ import { ComparisonTable } from "@/components/database/comparison-table";
 import { DEFAULT_TABLE_LIMIT } from "@/lib/constants/table-constants";
 import { categorizeColumns, getColumnsToDisplay, normalizeColumnName } from "@/lib/utils/table-column-utils";
 import { sortRelationships } from "@/lib/utils/relationship-utils";
+import { analyzeDataQuality } from "@/lib/utils/data-quality-utils";
 import { useFlowLoggerWithKey } from "@/lib/hooks/use-flow-logger";
 import { FLOW_NAMES } from "@/lib/constants/flow-constants";
 import { useSyncedColumns } from "@/lib/hooks/use-synced-columns";
@@ -313,6 +314,22 @@ export function TableComparisonView({
     return getColumnsToDisplay(rightTableData.columns, selectedColumns);
   }, [selectedColumns, rightTableData]);
 
+  const leftDataQuality = useMemo(
+    () =>
+      analyzeDataQuality(leftTableData?.rows || [], leftColumnsToDisplay, {
+        nameColumns: ["Oid"],
+      }),
+    [leftTableData?.rows, leftColumnsToDisplay]
+  );
+
+  const rightDataQuality = useMemo(
+    () =>
+      analyzeDataQuality(rightTableData?.rows || [], rightColumnsToDisplay, {
+        nameColumns: ["Oid"],
+      }),
+    [rightTableData?.rows, rightColumnsToDisplay]
+  );
+
   // Compare rows using optimized hook
   const comparisonResult = useTableComparison({ 
     leftRows: leftTableData?.rows || [],
@@ -450,6 +467,36 @@ export function TableComparisonView({
                   {(leftRelationships.length > 0 || rightRelationships.length > 0) && (
                     <span className="text-muted-foreground">
                       • {leftRelationships.length + rightRelationships.length} relationship{(leftRelationships.length + rightRelationships.length) > 1 ? 's' : ''}
+                    </span>
+                  )}
+                  {leftDataQuality.duplicateGroups.length > 0 && (
+                    <span className="text-amber-700">
+                      • Left duplicates: {leftDataQuality.duplicateIndexSet.size}
+                    </span>
+                  )}
+                  {rightDataQuality.duplicateGroups.length > 0 && (
+                    <span className="text-amber-700">
+                      • Right duplicates: {rightDataQuality.duplicateIndexSet.size}
+                    </span>
+                  )}
+                  {leftDataQuality.redundantColumns.length > 0 && (
+                    <span className="text-amber-700">
+                      • Left redundant cols: {leftDataQuality.redundantColumns.length}
+                    </span>
+                  )}
+                  {rightDataQuality.redundantColumns.length > 0 && (
+                    <span className="text-amber-700">
+                      • Right redundant cols: {rightDataQuality.redundantColumns.length}
+                    </span>
+                  )}
+                  {leftDataQuality.nameDuplicateGroups.length > 0 && (
+                    <span className="text-amber-700">
+                      • Left Oid trùng tên: {leftDataQuality.nameDuplicateIndexSet.size}
+                    </span>
+                  )}
+                  {rightDataQuality.nameDuplicateGroups.length > 0 && (
+                    <span className="text-amber-700">
+                      • Right Oid trùng tên: {rightDataQuality.nameDuplicateIndexSet.size}
                     </span>
                   )}
                 </div>
@@ -763,15 +810,20 @@ export function TableComparisonView({
                   totalRows={leftTableData.totalRows}
                   filteredRowCount={leftTableData.filteredRowCount}
                   onTableChange={onTableChange ? (schema, table) => onTableChange(leftTable.databaseName, schema, table) : undefined}
+                  duplicateGroups={leftDataQuality.duplicateGroups}
+                  duplicateIndexSet={leftDataQuality.duplicateIndexSet}
+                  redundantColumns={leftDataQuality.redundantColumns}
+                  nameDuplicateGroups={leftDataQuality.nameDuplicateGroups}
+                  nameDuplicateIndexSet={leftDataQuality.nameDuplicateIndexSet}
                   containerClassName={cn(
-                    "h-full max-w-[48vw] mx-auto px-4",
+                    "h-full w-full mx-auto px-4",
                     showColumnSelector ? "max-h-[calc(100vh-600px)]" : "max-h-[500px]"
                   )}
                 />
               </div>
 
               {/* Right Table */}
-              <div className="flex flex-col min-h-0">
+              <div className="flex flex-col border-l border-border min-h-0">
                 <ComparisonTable
                   databaseName={rightTable.databaseName}
                   schemaName={rightTable.schemaName}
@@ -789,9 +841,14 @@ export function TableComparisonView({
                   totalRows={rightTableData.totalRows}
                   filteredRowCount={rightTableData.filteredRowCount}
                   onTableChange={onTableChange ? (schema, table) => onTableChange(rightTable.databaseName, schema, table) : undefined}
+                  duplicateGroups={rightDataQuality.duplicateGroups}
+                  duplicateIndexSet={rightDataQuality.duplicateIndexSet}
+                  redundantColumns={rightDataQuality.redundantColumns}
+                  nameDuplicateGroups={rightDataQuality.nameDuplicateGroups}
+                  nameDuplicateIndexSet={rightDataQuality.nameDuplicateIndexSet}
                   containerClassName={cn(
-                    "h-full max-w-[48vw] mx-auto px-4",
-                    showColumnSelector ? "max-h-[calc(100vh-600px)]" : "max-h-[500px]"
+                    "h-full w-full mx-auto px-4",
+                    showColumnSelector ? "min-h-[calc(100vh-600px)] max-h-[calc(100vh-600px)]" : "min-h-[500px] max-h-[500px]"
                   )}
                 />
               </div>

@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo } from "react";
+import { useMemo, useRef, useState, useCallback, useEffect } from "react";
 import { Database, Filter, XCircle, Link2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -14,6 +14,8 @@ import { logger } from "@/lib/logger";
 import { ReferenceColumnFilter } from "@/components/database/reference-column-filter";
 import { TableRelationshipsDialog } from "@/components/database/table-relationships-dialog";
 import type { ForeignKeyInfo } from "@/lib/hooks/use-database-query";
+import type { DuplicateGroup } from "@/lib/utils/data-quality-utils";
+import { DataQualityAlert } from "@/components/database/data-quality-alert";
 
 type ComparisonResultMap = Map<number, {
   leftRow?: Record<string, unknown>;
@@ -40,6 +42,11 @@ interface ComparisonTableProps {
   totalRows?: number;
   filteredRowCount?: number;
   onTableChange?: (schema: string, table: string) => void;
+  duplicateGroups?: DuplicateGroup[];
+  duplicateIndexSet?: Set<number>;
+  redundantColumns?: string[];
+  nameDuplicateGroups?: DuplicateGroup[];
+  nameDuplicateIndexSet?: Set<number>;
 }
 
 export function ComparisonTable({
@@ -60,6 +67,11 @@ export function ComparisonTable({
   totalRows,
   filteredRowCount,
   onTableChange,
+  duplicateGroups = [],
+  duplicateIndexSet,
+  redundantColumns = [],
+  nameDuplicateGroups = [],
+  nameDuplicateIndexSet,
 }: ComparisonTableProps) {
   const debouncedFilterKey = useMemo(() => {
     const activeFilters = Object.entries(filters.debouncedFilters || {})
@@ -72,6 +84,44 @@ export function ComparisonTable({
   const effectiveTotalRows = totalRows ?? rows.length;
   const effectiveFilteredRowCount =
     filteredRowCount ?? rows.length;
+
+  const duplicateRowIndices = useMemo(() => {
+    if (!duplicateIndexSet || duplicateIndexSet.size === 0) {
+      return new Set<number>();
+    }
+    return new Set(duplicateIndexSet);
+  }, [duplicateIndexSet]);
+  const nameDuplicateRowIndices = useMemo(() => {
+    if (!nameDuplicateIndexSet || nameDuplicateIndexSet.size === 0) {
+      return new Set<number>();
+    }
+    return new Set(nameDuplicateIndexSet);
+  }, [nameDuplicateIndexSet]);
+  const rowRefs = useRef<Record<number, HTMLTableRowElement | null>>({});
+  const [highlightedRow, setHighlightedRow] = useState<number | null>(null);
+  const highlightTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleScrollToDuplicateRow = useCallback((index: number) => {
+    const rowEl = rowRefs.current[index];
+    if (rowEl) {
+      rowEl.scrollIntoView({ behavior: "smooth", block: "center" });
+      setHighlightedRow(index);
+      if (highlightTimeoutRef.current) {
+        clearTimeout(highlightTimeoutRef.current);
+      }
+      highlightTimeoutRef.current = setTimeout(() => {
+        setHighlightedRow(null);
+      }, 2000);
+    }
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (highlightTimeoutRef.current) {
+        clearTimeout(highlightTimeoutRef.current);
+      }
+    };
+  }, []);
 
   return (
     <div className="flex flex-col min-h-0">
@@ -98,6 +148,21 @@ export function ComparisonTable({
                   <span className="text-primary"> (filtered)</span>
                 )}
               </span>
+            )}
+            {duplicateGroups.length > 0 && (
+              <Badge variant="destructive" className="text-[10px]">
+                Duplicates: {duplicateRowIndices.size}
+              </Badge>
+            )}
+            {nameDuplicateGroups.length > 0 && (
+              <Badge variant="outline" className="text-[10px] border-amber-300 text-amber-700">
+                Oid trùng tên: {nameDuplicateRowIndices.size}
+              </Badge>
+            )}
+            {redundantColumns.length > 0 && (
+              <Badge variant="outline" className="text-[10px] border-amber-300 text-amber-700">
+                Redundant cols: {redundantColumns.length}
+              </Badge>
             )}
           </div>
           <div className="flex items-center gap-2">
@@ -153,6 +218,15 @@ export function ComparisonTable({
           </div>
         </div>
       </div>
+      <DataQualityAlert
+        duplicateGroups={duplicateGroups}
+        duplicateIndexSet={duplicateRowIndices}
+        nameDuplicateGroups={nameDuplicateGroups}
+        nameDuplicateIndexSet={nameDuplicateRowIndices}
+        redundantColumns={redundantColumns}
+        onRowNavigate={handleScrollToDuplicateRow}
+        className="border-b"
+      />
       <div className="flex-1 min-h-0">
         <Table
           key={`comparison-table-${side}-${debouncedFilterKey}-${rows.length}`}
@@ -262,6 +336,9 @@ export function ComparisonTable({
                   (firstColumn ? row[firstColumn] : undefined) ??
                   `${rowIndex}-${debouncedFilterKey}`;
                 const diff = comparisonResult?.get(rowIndex);
+                const isDuplicateRow = duplicateRowIndices.has(rowIndex);
+                const isNameDuplicateRow = nameDuplicateRowIndices.has(rowIndex);
+                const isHighlighted = highlightedRow === rowIndex;
                 const isDifferent =
                   side === "left"
                     ? diff?.status === "different" || diff?.status === "left-only"
@@ -270,8 +347,14 @@ export function ComparisonTable({
                 return (
                   <TableRow
                     key={String(uniqueKey)}
+                    ref={(el) => {
+                      rowRefs.current[rowIndex] = el;
+                    }}
                     className={cn(
-                      isDifferent && "bg-destructive/10 hover:bg-destructive/20"
+                      isDifferent && "bg-destructive/10 hover:bg-destructive/20",
+                      (isDuplicateRow || isNameDuplicateRow) &&
+                        "ring-1 ring-amber-400 bg-amber-50/80",
+                      isHighlighted && "ring-2 ring-primary"
                     )}
                   >
                     {columns.map((column) => {
