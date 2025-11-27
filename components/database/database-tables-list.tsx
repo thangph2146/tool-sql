@@ -319,6 +319,7 @@ export function DatabaseTablesList({
                 databaseName={databaseName}
                 schemaName={selectedTable.schema}
                 tableName={selectedTable.table}
+                onTableChange={handleTableClick}
               />
             </>
           )}

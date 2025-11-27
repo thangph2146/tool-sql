@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useCallback, useMemo } from "react";
+import { useState, useCallback, useMemo, useEffect, useRef } from "react";
 import {
   ChevronLeft,
   ChevronRight,
@@ -43,37 +43,29 @@ import {
 } from "@/components/ui/table";
 import { Badge } from "@/components/ui/badge";
 import {
-  Dialog,
-  DialogContent,
-  DialogDescription,
-  DialogHeader,
-  DialogTitle,
-  DialogTrigger,
-} from "@/components/ui/dialog";
-import { ScrollArea } from "@radix-ui/react-scroll-area";
-import {
   normalizeColumnName,
   filterHiddenColumns,
 } from "@/lib/utils/table-column-utils";
 import { logger } from "@/lib/logger";
-import { useEffect, useRef } from "react";
 import { ReferenceColumnFilter } from "@/components/database/reference-column-filter";
+import { TableRelationshipsDialog } from "@/components/database/table-relationships-dialog";
 
 interface TableDataViewProps {
   databaseName: DatabaseName;
   schemaName: string;
   tableName: string;
   onClose?: () => void;
+  onTableChange?: (schema: string, table: string) => void;
 }
 
 export function TableDataView({
   databaseName,
   schemaName,
   tableName,
+  onTableChange,
 }: TableDataViewProps) {
   const [limit, setLimit] = useState(DEFAULT_TABLE_LIMIT);
   const [includeReferences, setIncludeReferences] = useState(true);
-  const [showRelationshipsDialog, setShowRelationshipsDialog] = useState(false);
 
   // Flow logging for TableDataView
   const flowLogRef = useRef<ReturnType<typeof logger.createFlowLogger> | null>(
@@ -157,7 +149,15 @@ export function TableDataView({
   );
 
   const relationships = useMemo(() => {
-    return relationshipsData?.data?.relationships || [];
+    const rels = relationshipsData?.data?.relationships || [];
+    // Sắp xếp: nhóm theo PK_TABLE trước, sau đó theo FK_COLUMN
+    return [...rels].sort((a, b) => {
+      const pkTableCompare = a.PK_TABLE.localeCompare(b.PK_TABLE, 'vi');
+      if (pkTableCompare !== 0) {
+        return pkTableCompare;
+      }
+      return a.FK_COLUMN.localeCompare(b.FK_COLUMN, 'vi');
+    });
   }, [relationshipsData?.data?.relationships]);
 
   // Fetch initial data to get totalRows (minimal fetch)
@@ -411,11 +411,12 @@ export function TableDataView({
         </div>
         <div className="flex items-center gap-2">
           {relationships.length > 0 && (
-            <Dialog
-              open={showRelationshipsDialog}
-              onOpenChange={setShowRelationshipsDialog}
-            >
-              <DialogTrigger asChild>
+            <TableRelationshipsDialog
+              relationships={relationships}
+              schemaName={schemaName}
+              tableName={tableName}
+              onTableChange={onTableChange}
+              trigger={
                 <Button variant="outline" size="sm" className="gap-2">
                   <Link2 className="h-4 w-4" />
                   <span className="hidden sm:inline">Relationships</span>
@@ -423,55 +424,8 @@ export function TableDataView({
                     {relationships.length}
                   </Badge>
                 </Button>
-              </DialogTrigger>
-              <DialogContent className="max-w-2xl">
-                <DialogHeader>
-                  <DialogTitle>Table Relationships</DialogTitle>
-                  <DialogDescription>
-                    Foreign key relationships for {schemaName}.{tableName}
-                  </DialogDescription>
-                </DialogHeader>
-                <ScrollArea className="max-h-[60vh] overflow-y-auto">
-                  <div className="space-y-4">
-                    {relationships.map((rel, index) => (
-                      <div
-                        key={index}
-                        className="p-4 border border-border rounded-lg bg-muted/30"
-                      >
-                        <div className="flex items-start gap-3">
-                          <Link2 className="h-5 w-5 text-primary mt-0.5" />
-                          <div className="flex-1 space-y-2">
-                            <div className="flex items-center gap-2">
-                              <span className="font-semibold text-sm">
-                                {rel.FK_NAME}
-                              </span>
-                            </div>
-                            <div className="text-sm space-y-1">
-                              <div className="flex items-center gap-2">
-                                <span className="text-muted-foreground">
-                                  From:
-                                </span>
-                                <Badge variant="outline">
-                                  {rel.FK_SCHEMA}.{rel.FK_TABLE}.{rel.FK_COLUMN}
-                                </Badge>
-                              </div>
-                              <div className="flex items-center gap-2">
-                                <span className="text-muted-foreground">
-                                  To:
-                                </span>
-                                <Badge variant="outline">
-                                  {rel.PK_SCHEMA}.{rel.PK_TABLE}.{rel.PK_COLUMN}
-                                </Badge>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </ScrollArea>
-              </DialogContent>
-            </Dialog>
+              }
+            />
           )}
           <Field orientation="horizontal" className="gap-2 items-center">
             <FieldLabel

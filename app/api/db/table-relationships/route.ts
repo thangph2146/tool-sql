@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getTableForeignKeys } from '@/lib/db-manager';
+import { getTableForeignKeys, getTableReferencedBy } from '@/lib/db-manager';
 import { getDatabaseConfig } from '@/lib/db-config';
 import type { DatabaseName } from '@/lib/db-config';
 import { logger } from '@/lib/logger';
@@ -63,20 +63,65 @@ export async function GET(request: NextRequest) {
     flowLog.success(`Database ${databaseName} is enabled`);
     flowLog.info(`Fetching foreign key relationships for ${schemaName}.${tableName}`);
 
-    // Fetch foreign keys
-    const foreignKeys = await getTableForeignKeys(
+    // Fetch outgoing foreign keys (FK từ table hiện tại đi ra)
+    const outgoingForeignKeys = await getTableForeignKeys(
       databaseName,
       schemaName,
       tableName,
       flowId
     );
 
+    // Fetch incoming foreign keys (FK từ các table khác trỏ vào table hiện tại)
+    const incomingForeignKeys = await getTableReferencedBy(
+      databaseName,
+      schemaName,
+      tableName,
+      flowId
+    );
+
+    // Gộp cả hai loại relationships và loại bỏ duplicate
+    // Sử dụng Map với key là combination của các trường để đảm bảo unique
+    const relationshipsMap = new Map<string, typeof outgoingForeignKeys[0]>();
+    
+    // Thêm outgoing relationships
+    outgoingForeignKeys.forEach((rel) => {
+      const key = `${rel.FK_NAME}||${rel.FK_SCHEMA}.${rel.FK_TABLE}.${rel.FK_COLUMN}||${rel.PK_SCHEMA}.${rel.PK_TABLE}.${rel.PK_COLUMN}`;
+      if (!relationshipsMap.has(key)) {
+        relationshipsMap.set(key, rel);
+      }
+    });
+    
+    // Thêm incoming relationships (có thể trùng với outgoing nếu có self-reference)
+    incomingForeignKeys.forEach((rel) => {
+      const key = `${rel.FK_NAME}||${rel.FK_SCHEMA}.${rel.FK_TABLE}.${rel.FK_COLUMN}||${rel.PK_SCHEMA}.${rel.PK_TABLE}.${rel.PK_COLUMN}`;
+      if (!relationshipsMap.has(key)) {
+        relationshipsMap.set(key, rel);
+      }
+    });
+    
+    const allRelationships = Array.from(relationshipsMap.values());
+
+    // Sắp xếp relationships: nhóm theo PK_TABLE (Table Relationships) trước, sau đó theo FK_COLUMN
+    const sortedRelationships = [...allRelationships].sort((a, b) => {
+      // So sánh theo PK_TABLE trước (Table Relationships)
+      const pkTableCompare = a.PK_TABLE.localeCompare(b.PK_TABLE, 'vi');
+      if (pkTableCompare !== 0) {
+        return pkTableCompare;
+      }
+      // Nếu PK_TABLE giống nhau, sắp xếp theo FK_COLUMN
+      return a.FK_COLUMN.localeCompare(b.FK_COLUMN, 'vi');
+    });
+
     flowLog.success(`Relationships fetched successfully`, {
-      relationshipCount: foreignKeys.length,
+      outgoingCount: outgoingForeignKeys.length,
+      incomingCount: incomingForeignKeys.length,
+      totalCount: sortedRelationships.length,
     });
 
     flowLog.end(true, {
-      relationshipCount: foreignKeys.length,
+      outgoingCount: outgoingForeignKeys.length,
+      incomingCount: incomingForeignKeys.length,
+      totalCount: sortedRelationships.length,
     });
 
     return NextResponse.json({
@@ -86,7 +131,7 @@ export async function GET(request: NextRequest) {
         database: databaseName,
         schema: schemaName,
         table: tableName,
-        relationships: foreignKeys,
+        relationships: sortedRelationships,
       },
     });
   } catch (error) {

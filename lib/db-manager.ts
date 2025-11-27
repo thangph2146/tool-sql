@@ -801,6 +801,79 @@ export async function getTableForeignKeys(
 }
 
 /**
+ * Get foreign keys that reference the current table (incoming relationships)
+ * Returns relationships where other tables have FK pointing to this table's PK
+ */
+export async function getTableReferencedBy(
+  databaseName: DatabaseName,
+  schemaName: string,
+  tableName: string,
+  flowId?: string
+): Promise<ForeignKeyInfo[]> {
+  const flowLog = flowId ? logger.createFlowLogger(flowId) : null;
+  
+  try {
+    if (flowLog) {
+      flowLog.info(`Querying sys.foreign_keys for tables referencing ${schemaName}.${tableName}`);
+    } else {
+      logger.info(`Fetching incoming foreign keys for table: ${schemaName}.${tableName}`, {
+        database: databaseName,
+        schema: schemaName,
+        table: tableName,
+      }, 'DB_FOREIGN_KEYS_INCOMING');
+    }
+
+    // Escape schema and table names for SQL injection prevention
+    const escapedSchema = schemaName.replace(/]/g, ']]');
+    const escapedTable = tableName.replace(/]/g, ']]');
+    
+    const result = await query<ForeignKeyInfo>(databaseName, `
+      SELECT 
+        fk.name AS FK_NAME,
+        OBJECT_SCHEMA_NAME(fk.parent_object_id) AS FK_SCHEMA,
+        OBJECT_NAME(fk.parent_object_id) AS FK_TABLE,
+        COL_NAME(fkc.parent_object_id, fkc.parent_column_id) AS FK_COLUMN,
+        OBJECT_SCHEMA_NAME(fk.referenced_object_id) AS PK_SCHEMA,
+        OBJECT_NAME(fk.referenced_object_id) AS PK_TABLE,
+        COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id) AS PK_COLUMN
+      FROM sys.foreign_keys AS fk
+      INNER JOIN sys.foreign_key_columns AS fkc 
+        ON fk.object_id = fkc.constraint_object_id
+      WHERE OBJECT_SCHEMA_NAME(fk.referenced_object_id) = N'${escapedSchema}'
+        AND OBJECT_NAME(fk.referenced_object_id) = N'${escapedTable}'
+      ORDER BY fk.name, fkc.constraint_column_id
+    `);
+
+    const foreignKeys = result.recordset;
+
+    if (flowLog) {
+      flowLog.success(`Fetched ${foreignKeys.length} incoming foreign keys`);
+    } else {
+      logger.success(`Successfully fetched ${foreignKeys.length} incoming foreign keys for ${schemaName}.${tableName}`, {
+        database: databaseName,
+        schema: schemaName,
+        table: tableName,
+        foreignKeyCount: foreignKeys.length,
+      }, 'DB_FOREIGN_KEYS_INCOMING');
+    }
+
+    return foreignKeys;
+  } catch (error) {
+    if (flowLog) {
+      flowLog.error(`Error fetching incoming foreign keys`, error);
+    } else {
+      logger.error(`Error fetching incoming foreign keys for table: ${schemaName}.${tableName}`, {
+        error,
+        database: databaseName,
+        schema: schemaName,
+        table: tableName,
+      }, 'DB_FOREIGN_KEYS_INCOMING');
+    }
+    throw error;
+  }
+}
+
+/**
  * Find columns for full name (Ho + Ten) in a referenced table
  * Returns SQL expression to concatenate Ho and Ten columns
  */
