@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
 import { InputGroup, InputGroupInput, InputGroupButton, InputGroupAddon } from "@/components/ui/input-group";
+import { Field, FieldContent } from "@/components/ui/field";
 import { TableCell as TableCellComponent } from "../tables/table-cell";
 import { cn } from "@/lib/utils";
 import type { UseTableFiltersReturn } from "@/lib/hooks/use-table-filters";
@@ -16,6 +17,7 @@ import { TableRelationshipsDialog } from "../tables/table-relationships-dialog";
 import type { ForeignKeyInfo } from "@/lib/hooks/use-database-query";
 import type { DuplicateGroup } from "@/lib/utils/data-quality-utils";
 import { DataQualityAlert } from "../shared";
+import { TABLE_LIMIT_OPTIONS } from "@/lib/constants/table-constants";
 
 type ComparisonResultMap = Map<number, {
   leftRow?: Record<string, unknown>;
@@ -41,6 +43,8 @@ interface ComparisonTableProps {
   includeReferences?: boolean;
   totalRows?: number;
   filteredRowCount?: number;
+  limit?: number;
+  onLimitChange?: (limit: number) => void;
   onTableChange?: (schema: string, table: string) => void;
   duplicateGroups?: DuplicateGroup[];
   duplicateIndexSet?: Set<number>;
@@ -66,6 +70,8 @@ export function ComparisonTable({
   includeReferences = false,
   totalRows,
   filteredRowCount,
+  limit,
+  onLimitChange,
   onTableChange,
   duplicateGroups = [],
   duplicateIndexSet,
@@ -122,6 +128,11 @@ export function ComparisonTable({
       }
     };
   }, []);
+
+  const handleLimitChange = useCallback((e: React.ChangeEvent<HTMLSelectElement>) => {
+    const newLimit = parseInt(e.target.value, 10);
+    onLimitChange?.(newLimit);
+  }, [onLimitChange]);
 
   return (
     <div className="flex flex-col min-h-0">
@@ -207,6 +218,23 @@ export function ComparisonTable({
                 <XCircle className="h-3 w-3" />
                 Clear All
               </Button>
+            )}
+            {limit !== undefined && onLimitChange && (
+              <Field orientation="horizontal" className="gap-2">
+                <FieldContent>
+                  <select
+                    value={limit}
+                    onChange={handleLimitChange}
+                    className="h-7 rounded-md border border-input bg-background px-2 text-xs focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                  >
+                    {TABLE_LIMIT_OPTIONS.map((opt) => (
+                      <option key={opt} value={opt}>
+                        {opt}
+                      </option>
+                    ))}
+                  </select>
+                </FieldContent>
+              </Field>
             )}
           </div>
         </div>

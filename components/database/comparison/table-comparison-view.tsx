@@ -50,7 +50,7 @@ export function TableComparisonView({
   asDialog = false,
   onTableChange,
 }: TableComparisonViewProps) {
-  const [limit] = useState(DEFAULT_TABLE_LIMIT);
+  const [limit, setLimit] = useState(DEFAULT_TABLE_LIMIT);
   const [page] = useState(0);
   const [showColumnSelector] = useState(false);
   const [showFilters, setShowFilters] = useState(false);
@@ -418,6 +418,8 @@ export function TableComparisonView({
                   includeReferences={includeReferences}
                   totalRows={leftTableData.totalRows}
                   filteredRowCount={leftTableData.filteredRowCount}
+                  limit={limit}
+                  onLimitChange={setLimit}
                   onTableChange={onTableChange ? (schema, table) => onTableChange(leftTable.databaseName, schema, table) : undefined}
                   duplicateGroups={leftDataQuality.duplicateGroups}
                   duplicateIndexSet={leftDataQuality.duplicateIndexSet}
@@ -449,6 +451,8 @@ export function TableComparisonView({
                   includeReferences={includeReferences}
                   totalRows={rightTableData.totalRows}
                   filteredRowCount={rightTableData.filteredRowCount}
+                  limit={limit}
+                  onLimitChange={setLimit}
                   onTableChange={onTableChange ? (schema, table) => onTableChange(rightTable.databaseName, schema, table) : undefined}
                   duplicateGroups={rightDataQuality.duplicateGroups}
                   duplicateIndexSet={rightDataQuality.duplicateIndexSet}
