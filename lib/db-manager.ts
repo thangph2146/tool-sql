@@ -959,14 +959,54 @@ export async function getTableDataWithConfig(
       }, 'DB_TABLE_DATA');
     }
 
-    // Escape schema and table names for SQL Server
-    const escapedSchema = escapeSqlIdentifier(schemaName);
-    const escapedTable = escapeSqlIdentifier(tableName);
+    // Use QUOTENAME SQL function to properly escape identifiers with special characters
+    // This handles table names with quotes like '1409_Chứng chỉ' correctly
+    const sqlConfig = convertToSqlConfig(config);
+    let tempPool: sql.ConnectionPool | null = null;
+    let quotedSchema: string;
+    let quotedTable: string;
+    
+    try {
+      tempPool = new sql.ConnectionPool(sqlConfig);
+      await tempPool.connect();
+      
+      // Get properly quoted names using QUOTENAME (handles special characters including quotes)
+      const quotedSchemaResult = await tempPool.request()
+        .input('name', sql.NVarChar, schemaName)
+        .query<{ quoted: string }>(`SELECT QUOTENAME(@name, '[') as quoted`);
+      const quotedTableResult = await tempPool.request()
+        .input('name', sql.NVarChar, tableName)
+        .query<{ quoted: string }>(`SELECT QUOTENAME(@name, '[') as quoted`);
+      
+      quotedSchema = quotedSchemaResult.recordset[0]?.quoted || `[${escapeSqlIdentifier(schemaName)}]`;
+      quotedTable = quotedTableResult.recordset[0]?.quoted || `[${escapeSqlIdentifier(tableName)}]`;
+    } catch (quoteError) {
+      // Fallback to bracket notation if QUOTENAME fails
+      if (flowLog) {
+        flowLog.warn(`QUOTENAME failed, using bracket notation`, { 
+          error: quoteError instanceof Error ? quoteError.message : String(quoteError),
+          schema: schemaName,
+          table: tableName
+        });
+      }
+      const escapedSchema = escapeSqlIdentifier(schemaName);
+      const escapedTable = escapeSqlIdentifier(tableName);
+      quotedSchema = `[${escapedSchema}]`;
+      quotedTable = `[${escapedTable}]`;
+    } finally {
+      if (tempPool) {
+        try {
+          await tempPool.close();
+        } catch {
+          // Ignore close errors
+        }
+      }
+    }
 
-    // Get total row count
+    // Get total row count using QUOTENAME result
     const countResult = await queryWithConfig<{ total: number }>(config, `
       SELECT COUNT(*) as total
-      FROM [${escapedSchema}].[${escapedTable}]
+      FROM ${quotedSchema}.${quotedTable}
     `);
     const totalRows = countResult.recordset[0]?.total || 0;
 
@@ -974,12 +1014,12 @@ export async function getTableDataWithConfig(
       flowLog.info(`Total rows: ${totalRows}, fetching data with pagination (limit: ${limit}, offset: ${offset})`);
     }
 
-    // Get table data with pagination
+    // Get table data with pagination using QUOTENAME result
     const dataResult = await queryWithConfig(config, `
       SELECT TOP ${limit} *
       FROM (
         SELECT *, ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) as rn
-        FROM [${escapedSchema}].[${escapedTable}]
+        FROM ${quotedSchema}.${quotedTable}
       ) AS t
       WHERE t.rn > ${offset}
       ORDER BY t.rn
@@ -1761,7 +1801,8 @@ async function findFullNameExpression(
     
     if (fullNameColumn && !hoColumn && !tenColumn) {
       const escapedFullName = fullNameColumn.replace(/]/g, ']]');
-      return `${alias}.[${escapedFullName}]`;
+      // CAST to NVARCHAR to avoid bit/varchar incompatibility errors
+      return `CAST(${alias}.[${escapedFullName}] AS NVARCHAR(MAX))`;
     }
 
     // If both found, concatenate them
@@ -1769,18 +1810,21 @@ async function findFullNameExpression(
       const escapedHo = hoColumn.replace(/]/g, ']]');
       const escapedTen = tenColumn.replace(/]/g, ']]');
       // Use LTRIM and RTRIM to handle NULL values and spaces
-      return `LTRIM(RTRIM(ISNULL(${alias}.[${escapedHo}], '') + ' ' + ISNULL(${alias}.[${escapedTen}], '')))`;
+      // CAST to NVARCHAR to avoid bit/varchar incompatibility errors
+      return `LTRIM(RTRIM(ISNULL(CAST(${alias}.[${escapedHo}] AS NVARCHAR(MAX)), '') + ' ' + ISNULL(CAST(${alias}.[${escapedTen}] AS NVARCHAR(MAX)), '')))`;
     }
 
     // If only one found, return it
     if (hoColumn) {
       const escapedHo = hoColumn.replace(/]/g, ']]');
-      return `${alias}.[${escapedHo}]`;
+      // CAST to NVARCHAR to avoid bit/varchar incompatibility errors
+      return `CAST(${alias}.[${escapedHo}] AS NVARCHAR(MAX))`;
     }
     
     if (tenColumn) {
       const escapedTen = tenColumn.replace(/]/g, ']]');
-      return `${alias}.[${escapedTen}]`;
+      // CAST to NVARCHAR to avoid bit/varchar incompatibility errors
+      return `CAST(${alias}.[${escapedTen}] AS NVARCHAR(MAX))`;
     }
 
     return null;
@@ -1958,14 +2002,54 @@ export async function getTableDataWithReferencesWithConfig(
       };
     }
 
-    // Escape schema and table names for count query
-    const escapedCountSchema = escapeSqlIdentifier(schemaName);
-    const escapedCountTable = escapeSqlIdentifier(tableName);
+    // Use QUOTENAME SQL function to properly escape identifiers with special characters
+    // This handles table names with quotes like '1409_Chứng chỉ' correctly
+    const sqlConfig = convertToSqlConfig(config);
+    let tempPool: sql.ConnectionPool | null = null;
+    let quotedSchema: string;
+    let quotedTable: string;
+    
+    try {
+      tempPool = new sql.ConnectionPool(sqlConfig);
+      await tempPool.connect();
+      
+      // Get properly quoted names using QUOTENAME (handles special characters including quotes)
+      const quotedSchemaResult = await tempPool.request()
+        .input('name', sql.NVarChar, schemaName)
+        .query<{ quoted: string }>(`SELECT QUOTENAME(@name, '[') as quoted`);
+      const quotedTableResult = await tempPool.request()
+        .input('name', sql.NVarChar, tableName)
+        .query<{ quoted: string }>(`SELECT QUOTENAME(@name, '[') as quoted`);
+      
+      quotedSchema = quotedSchemaResult.recordset[0]?.quoted || `[${escapeSqlIdentifier(schemaName)}]`;
+      quotedTable = quotedTableResult.recordset[0]?.quoted || `[${escapeSqlIdentifier(tableName)}]`;
+    } catch (quoteError) {
+      // Fallback to bracket notation if QUOTENAME fails
+      if (flowLog) {
+        flowLog.warn(`QUOTENAME failed, using bracket notation`, { 
+          error: quoteError instanceof Error ? quoteError.message : String(quoteError),
+          schema: schemaName,
+          table: tableName
+        });
+      }
+      const escapedSchema = escapeSqlIdentifier(schemaName);
+      const escapedTable = escapeSqlIdentifier(tableName);
+      quotedSchema = `[${escapedSchema}]`;
+      quotedTable = `[${escapedTable}]`;
+    } finally {
+      if (tempPool) {
+        try {
+          await tempPool.close();
+        } catch {
+          // Ignore close errors
+        }
+      }
+    }
 
-    // Get total row count using queryWithConfig
+    // Get total row count using QUOTENAME result
     const countResult = await queryWithConfig<{ total: number }>(config, `
       SELECT COUNT(*) as total
-      FROM [${escapedCountSchema}].[${escapedCountTable}]
+      FROM ${quotedSchema}.${quotedTable}
     `);
     const totalRows = countResult.recordset[0]?.total || 0;
 
@@ -1991,9 +2075,8 @@ export async function getTableDataWithReferencesWithConfig(
     const selectColumns: string[] = [];
     const joinClauses: string[] = [];
     
-    // Escape schema and table names for main table (bracket notation, no string escaping needed)
-    const escapedMainSchema = escapeSqlIdentifier(schemaName);
-    const escapedMainTable = escapeSqlIdentifier(tableName);
+    // Use quotedSchema and quotedTable from QUOTENAME for main table queries
+    // These are already properly escaped with QUOTENAME above
     
     // Helper function to find display column with config
     const findDisplayColumnWithConfig = async (
@@ -2134,23 +2217,27 @@ export async function getTableDataWithReferencesWithConfig(
         
         if (fullNameColumn && !hoColumn && !tenColumn) {
           const escapedFullName = fullNameColumn.replace(/]/g, ']]');
-          return `${alias}.[${escapedFullName}]`;
+          // CAST to NVARCHAR to avoid bit/varchar incompatibility errors
+          return `CAST(${alias}.[${escapedFullName}] AS NVARCHAR(MAX))`;
         }
 
         if (hoColumn && tenColumn) {
           const escapedHo = hoColumn.replace(/]/g, ']]');
           const escapedTen = tenColumn.replace(/]/g, ']]');
-          return `LTRIM(RTRIM(ISNULL(${alias}.[${escapedHo}], '') + ' ' + ISNULL(${alias}.[${escapedTen}], '')))`;
+          // CAST to NVARCHAR to avoid bit/varchar incompatibility errors
+          return `LTRIM(RTRIM(ISNULL(CAST(${alias}.[${escapedHo}] AS NVARCHAR(MAX)), '') + ' ' + ISNULL(CAST(${alias}.[${escapedTen}] AS NVARCHAR(MAX)), '')))`;
         }
 
         if (hoColumn) {
           const escapedHo = hoColumn.replace(/]/g, ']]');
-          return `${alias}.[${escapedHo}]`;
+          // CAST to NVARCHAR to avoid bit/varchar incompatibility errors
+          return `CAST(${alias}.[${escapedHo}] AS NVARCHAR(MAX))`;
         }
         
         if (tenColumn) {
           const escapedTen = tenColumn.replace(/]/g, ']]');
-          return `${alias}.[${escapedTen}]`;
+          // CAST to NVARCHAR to avoid bit/varchar incompatibility errors
+          return `CAST(${alias}.[${escapedTen}] AS NVARCHAR(MAX))`;
         }
 
         return null;
@@ -2175,7 +2262,7 @@ export async function getTableDataWithReferencesWithConfig(
       
       joinClauses.push(`
         LEFT JOIN [${escapedPkSchema}].[${escapedPkTable}] AS ${alias}
-          ON [${escapedMainSchema}].[${escapedMainTable}].[${escapedFkColumn}] = ${alias}.[${escapedPkColumn}]
+          ON ${quotedSchema}.${quotedTable}.[${escapedFkColumn}] = ${alias}.[${escapedPkColumn}]
       `);
       
       const displayInfo = await findDisplayColumnWithConfig(
@@ -2234,28 +2321,37 @@ export async function getTableDataWithReferencesWithConfig(
               
               if (nameColumn) {
                 const escapedName = nameColumn.replace(/]/g, ']]');
-                displayValueExpr = `${fkInfo.alias}.[${escapedName}]`;
+                // CAST to NVARCHAR to avoid bit/varchar incompatibility errors
+                displayValueExpr = `CAST(${fkInfo.alias}.[${escapedName}] AS NVARCHAR(MAX))`;
               } else {
                 const firstCol = refColumns[0];
                 if (firstCol) {
                   const escapedFirst = firstCol.replace(/]/g, ']]');
-                  displayValueExpr = `${fkInfo.alias}.[${escapedFirst}]`;
+                  // CAST to NVARCHAR to avoid bit/varchar incompatibility errors
+                  displayValueExpr = `CAST(${fkInfo.alias}.[${escapedFirst}] AS NVARCHAR(MAX))`;
                 } else {
-                  displayValueExpr = `${fkInfo.alias}.[${fkInfo.fk.PK_COLUMN.replace(/]/g, ']]')}]`;
+                  // CAST to NVARCHAR to avoid bit/varchar incompatibility errors
+                  displayValueExpr = `CAST(${fkInfo.alias}.[${fkInfo.fk.PK_COLUMN.replace(/]/g, ']]')}] AS NVARCHAR(MAX))`;
                 }
               }
             }
           } else {
-            displayValueExpr = fkInfo.displayColumn.expression 
-              ? fkInfo.displayColumn.expression.replace('{alias}', fkInfo.alias)
-              : `${fkInfo.alias}.[${fkInfo.fk.PK_COLUMN.replace(/]/g, ']]')}]`;
+            if (fkInfo.displayColumn.expression) {
+              // If expression already exists, wrap it in CAST to ensure compatibility
+              displayValueExpr = `CAST((${fkInfo.displayColumn.expression.replace('{alias}', fkInfo.alias)}) AS NVARCHAR(MAX))`;
+            } else {
+              // CAST to NVARCHAR to avoid bit/varchar incompatibility errors
+              displayValueExpr = `CAST(${fkInfo.alias}.[${fkInfo.fk.PK_COLUMN.replace(/]/g, ']]')}] AS NVARCHAR(MAX))`;
+            }
           }
           
-          const originalIdColumn = `[${escapedMainSchema}].[${escapedMainTable}].[${escapedColumn}]`;
+          const originalIdColumn = `${quotedSchema}.${quotedTable}.[${escapedColumn}]`;
           
+          // displayValueExpr is already CAST to NVARCHAR(MAX), so we can use it directly
+          // Use NCHAR(10) instead of CHAR(10) to ensure NVARCHAR compatibility
           const combinedExpr = `CASE 
-            WHEN ${displayValueExpr} IS NOT NULL AND LTRIM(RTRIM(CAST(${displayValueExpr} AS NVARCHAR(MAX)))) != '' 
-            THEN CAST(${displayValueExpr} AS NVARCHAR(MAX)) + CHAR(10) + '(ID: ' + CAST(${originalIdColumn} AS NVARCHAR(MAX)) + ')'
+            WHEN ${displayValueExpr} IS NOT NULL AND LTRIM(RTRIM(${displayValueExpr})) != '' 
+            THEN ${displayValueExpr} + NCHAR(10) + N'(ID: ' + CAST(${originalIdColumn} AS NVARCHAR(MAX)) + N')'
             ELSE CAST(${originalIdColumn} AS NVARCHAR(MAX))
           END`;
           
@@ -2265,10 +2361,10 @@ export async function getTableDataWithReferencesWithConfig(
           const escapedOriginalIdColumnName = originalIdColumnName.replace(/]/g, ']]');
           selectColumns.push(`${originalIdColumn} AS [${escapedOriginalIdColumnName}]`);
         } else {
-          selectColumns.push(`[${escapedMainSchema}].[${escapedMainTable}].[${escapedColumn}]`);
+          selectColumns.push(`${quotedSchema}.${quotedTable}.[${escapedColumn}]`);
         }
       } else {
-        selectColumns.push(`[${escapedMainSchema}].[${escapedMainTable}].[${escapedColumn}]`);
+        selectColumns.push(`${quotedSchema}.${quotedTable}.[${escapedColumn}]`);
       }
     }
     
@@ -2283,7 +2379,7 @@ export async function getTableDataWithReferencesWithConfig(
       SELECT TOP ${limit} *
       FROM (
         SELECT ${selectClause}, ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) as rn
-        FROM [${escapedMainSchema}].[${escapedMainTable}]
+        FROM ${quotedSchema}.${quotedTable}
         ${joinClause}
       ) AS t
       WHERE t.rn > ${offset}
@@ -2366,14 +2462,51 @@ export async function getTableDataWithReferences(
     // Get foreign keys for this table
     const foreignKeys = await getTableForeignKeys(databaseName, schemaName, tableName, flowId);
 
-    // Escape schema and table names for count query
-    const escapedCountSchema = escapeSqlIdentifier(schemaName);
-    const escapedCountTable = escapeSqlIdentifier(tableName);
+    // Use QUOTENAME SQL function to properly escape identifiers with special characters
+    // This handles table names with quotes like '1409_Chứng chỉ' correctly
+    let quotedSchema: string;
+    let quotedTable: string;
+    
+    try {
+      // Get connection pool for this database
+      const dbConfig = getDatabaseConfig(databaseName);
+      const sqlConfig = convertToSqlConfig(dbConfig);
+      const tempPool = new sql.ConnectionPool(sqlConfig);
+      await tempPool.connect();
+      
+      try {
+        // Get properly quoted names using QUOTENAME (handles special characters including quotes)
+        const quotedSchemaResult = await tempPool.request()
+          .input('name', sql.NVarChar, schemaName)
+          .query<{ quoted: string }>(`SELECT QUOTENAME(@name, '[') as quoted`);
+        const quotedTableResult = await tempPool.request()
+          .input('name', sql.NVarChar, tableName)
+          .query<{ quoted: string }>(`SELECT QUOTENAME(@name, '[') as quoted`);
+        
+        quotedSchema = quotedSchemaResult.recordset[0]?.quoted || `[${escapeSqlIdentifier(schemaName)}]`;
+        quotedTable = quotedTableResult.recordset[0]?.quoted || `[${escapeSqlIdentifier(tableName)}]`;
+      } finally {
+        await tempPool.close();
+      }
+    } catch (quoteError) {
+      // Fallback to bracket notation if QUOTENAME fails
+      if (flowLog) {
+        flowLog.warn(`QUOTENAME failed, using bracket notation`, { 
+          error: quoteError instanceof Error ? quoteError.message : String(quoteError),
+          schema: schemaName,
+          table: tableName
+        });
+      }
+      const escapedSchema = escapeSqlIdentifier(schemaName);
+      const escapedTable = escapeSqlIdentifier(tableName);
+      quotedSchema = `[${escapedSchema}]`;
+      quotedTable = `[${escapedTable}]`;
+    }
 
-    // Get total row count
+    // Get total row count using QUOTENAME result
     const countResult = await query<{ total: number }>(databaseName, `
       SELECT COUNT(*) as total
-      FROM [${escapedCountSchema}].[${escapedCountTable}]
+      FROM ${quotedSchema}.${quotedTable}
     `);
     const totalRows = countResult.recordset[0]?.total || 0;
 
@@ -2416,9 +2549,8 @@ export async function getTableDataWithReferences(
     const selectColumns: string[] = [];
     const joinClauses: string[] = [];
     
-    // Escape schema and table names
-    const escapedSchema = escapeSqlIdentifier(schemaName);
-    const escapedTable = escapeSqlIdentifier(tableName);
+    // Use quotedSchema and quotedTable from QUOTENAME for main table queries
+    // These are already properly escaped with QUOTENAME above
     
     // Process each foreign key to create joins first
     for (let i = 0; i < foreignKeys.length; i++) {
@@ -2436,7 +2568,7 @@ export async function getTableDataWithReferences(
       // Create the join with the correct FK_COLUMN to PK_COLUMN mapping
       joinClauses.push(`
         LEFT JOIN [${escapedPkSchema}].[${escapedPkTable}] AS ${alias}
-          ON [${escapedSchema}].[${escapedTable}].[${escapedFkColumn}] = ${alias}.[${escapedPkColumn}]
+          ON ${quotedSchema}.${quotedTable}.[${escapedFkColumn}] = ${alias}.[${escapedPkColumn}]
       `);
       
       // Find display column for this specific FK relationship
@@ -2505,35 +2637,43 @@ export async function getTableDataWithReferences(
               
               if (nameColumn) {
                 const escapedName = nameColumn.replace(/]/g, ']]');
-                displayValueExpr = `${fkInfo.alias}.[${escapedName}]`;
+                // CAST to NVARCHAR to avoid bit/varchar incompatibility errors
+                displayValueExpr = `CAST(${fkInfo.alias}.[${escapedName}] AS NVARCHAR(MAX))`;
               } else {
                 // Last resort: use the first non-PK column
                 const firstCol = refColumns[0];
                 if (firstCol) {
                   const escapedFirst = firstCol.replace(/]/g, ']]');
-                  displayValueExpr = `${fkInfo.alias}.[${escapedFirst}]`;
+                  // CAST to NVARCHAR to avoid bit/varchar incompatibility errors
+                  displayValueExpr = `CAST(${fkInfo.alias}.[${escapedFirst}] AS NVARCHAR(MAX))`;
                 } else {
                   // Ultimate fallback: use PK column itself
-                  displayValueExpr = `${fkInfo.alias}.[${fkInfo.fk.PK_COLUMN.replace(/]/g, ']]')}]`;
+                  // CAST to NVARCHAR to avoid bit/varchar incompatibility errors
+                  displayValueExpr = `CAST(${fkInfo.alias}.[${fkInfo.fk.PK_COLUMN.replace(/]/g, ']]')}] AS NVARCHAR(MAX))`;
                 }
               }
             }
           } else {
             // Use regular display column
-            displayValueExpr = fkInfo.displayColumn.expression 
-              ? fkInfo.displayColumn.expression.replace('{alias}', fkInfo.alias)
-              : `${fkInfo.alias}.[${fkInfo.fk.PK_COLUMN.replace(/]/g, ']]')}]`;
+            if (fkInfo.displayColumn.expression) {
+              // If expression already exists, wrap it in CAST to ensure compatibility
+              displayValueExpr = `CAST((${fkInfo.displayColumn.expression.replace('{alias}', fkInfo.alias)}) AS NVARCHAR(MAX))`;
+            } else {
+              // CAST to NVARCHAR to avoid bit/varchar incompatibility errors
+              displayValueExpr = `CAST(${fkInfo.alias}.[${fkInfo.fk.PK_COLUMN.replace(/]/g, ']]')}] AS NVARCHAR(MAX))`;
+            }
           }
           
           // Combine: display value + newline + "(ID: " + original ID + ")"
           // Format: "DisplayValue\n(ID: OriginalID)" or just "OriginalID" if no display value
-          const originalIdColumn = `[${escapedSchema}].[${escapedTable}].[${escapedColumn}]`;
+          const originalIdColumn = `${quotedSchema}.${quotedTable}.[${escapedColumn}]`;
           
           // Build combined expression: if display value exists, show "DisplayValue\n(ID: OriginalID)", otherwise show just "OriginalID"
-          // Use CHAR(13) + CHAR(10) for Windows line break (CRLF) or just CHAR(10) for LF
+          // displayValueExpr is already CAST to NVARCHAR(MAX), so we can use it directly
+          // Use NCHAR(10) instead of CHAR(10) to ensure NVARCHAR compatibility
           const combinedExpr = `CASE 
-            WHEN ${displayValueExpr} IS NOT NULL AND LTRIM(RTRIM(CAST(${displayValueExpr} AS NVARCHAR(MAX)))) != '' 
-            THEN CAST(${displayValueExpr} AS NVARCHAR(MAX)) + CHAR(10) + '(ID: ' + CAST(${originalIdColumn} AS NVARCHAR(MAX)) + ')'
+            WHEN ${displayValueExpr} IS NOT NULL AND LTRIM(RTRIM(${displayValueExpr})) != '' 
+            THEN ${displayValueExpr} + NCHAR(10) + N'(ID: ' + CAST(${originalIdColumn} AS NVARCHAR(MAX)) + N')'
             ELSE CAST(${originalIdColumn} AS NVARCHAR(MAX))
           END`;
           
@@ -2546,19 +2686,16 @@ export async function getTableDataWithReferences(
           selectColumns.push(`${originalIdColumn} AS [${escapedOriginalIdColumnName}]`);
         } else {
           // Fallback: keep original column if FK info not found
-          selectColumns.push(`[${escapedSchema}].[${escapedTable}].[${escapedColumn}]`);
+          selectColumns.push(`${quotedSchema}.${quotedTable}.[${escapedColumn}]`);
         }
       } else {
         // Regular column - keep original value
-        selectColumns.push(`[${escapedSchema}].[${escapedTable}].[${escapedColumn}]`);
+        selectColumns.push(`${quotedSchema}.${quotedTable}.[${escapedColumn}]`);
       }
     }
 
-    // Escape schema and table names for main query
-    const escapedMainSchema = escapeSqlIdentifier(schemaName);
-    const escapedMainTable = escapeSqlIdentifier(tableName);
-    
     // Build the query with joins
+    // Use quotedSchema and quotedTable from QUOTENAME for main table queries
     const selectClause = selectColumns.join(', ');
     const joinClause = joinClauses.join(' ');
 
@@ -2583,7 +2720,7 @@ export async function getTableDataWithReferences(
       SELECT TOP ${limit} *
       FROM (
         SELECT ${selectClause}, ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) as rn
-        FROM [${escapedMainSchema}].[${escapedMainTable}]
+        FROM ${quotedSchema}.${quotedTable}
         ${joinClause}
       ) AS t
       WHERE t.rn > ${offset}

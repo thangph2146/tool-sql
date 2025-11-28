@@ -455,11 +455,33 @@ export function useTableData(
           : "";
       url += filtersQuery;
       
-      const response = await axiosClient.get<TableDataResponse>(url);
-      return response.data;
+      try {
+        const response = await axiosClient.get<TableDataResponse>(url);
+        
+        // Check if response indicates an error
+        if (!response.data.success && response.data.error) {
+          throw new Error(response.data.error || response.data.message || 'Failed to load table data');
+        }
+        
+        return response.data;
+      } catch (error) {
+        // Log error for debugging
+        logger.error('Error in useTableData', {
+          url,
+          database: databaseName,
+          schema: schemaName,
+          table: tableName,
+          error: error instanceof Error ? error.message : String(error),
+        }, 'DB_TABLE_DATA');
+        throw error;
+      }
     },
     enabled: enabled && !!databaseName && !!schemaName && !!tableName,
-    staleTime: 30 * 1000, // Consider data fresh for 30 seconds
+    staleTime: 5 * 60 * 1000, // Consider data fresh for 5 minutes
+    gcTime: 10 * 60 * 1000, // Keep in cache for 10 minutes
+    refetchOnMount: false, // Prevent refetch when component remounts
+    refetchOnWindowFocus: false, // Prevent refetch on window focus
+    retry: 1, // Only retry once on failure
   });
 }
 
@@ -501,7 +523,11 @@ export function useTableRelationships(
       return response.data;
     },
     enabled: enabled && !!databaseName && !!schemaName && !!tableName,
-    staleTime: 60 * 1000, // Consider data fresh for 1 minute
+    staleTime: 5 * 60 * 1000, // Consider data fresh for 5 minutes
+    gcTime: 10 * 60 * 1000, // Keep in cache for 10 minutes
+    refetchOnMount: false, // Prevent refetch when component remounts
+    refetchOnWindowFocus: false, // Prevent refetch on window focus
+    retry: 1, // Only retry once on failure
   });
 }
 

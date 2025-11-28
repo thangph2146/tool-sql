@@ -80,25 +80,13 @@ export function TableDataView({
   }, [flowLog, databaseName, schemaName, tableName]);
 
   // Fetch relationships (fallback if not included in table data)
+  // Only fetch if includeReferences is false (when relationships are not in tableData)
   const { data: relationshipsData } = useTableRelationships(
     databaseName,
     schemaName,
     tableName,
-    true
+    !includeReferences // Only enable if relationships are NOT included in table data
   );
-
-  // Fetch initial data to get totalRows (minimal fetch)
-  const { data: initialData } = useTableData(
-    databaseName,
-    schemaName,
-    tableName,
-    1,
-    0,
-    true,
-    includeReferences
-  );
-
-  const totalRows = initialData?.data?.totalRows || 0;
 
   // Filter state (used to drive API filters)
   const {
@@ -113,7 +101,27 @@ export function TableDataView({
     handleClearFilter: baseHandleClearFilter,
   } = useTableFilters();
 
-  // Use pagination hook
+  // Fetch data with pagination (server-side filters)
+  // This single call provides both the data and totalRows
+  // Start with offset 0, pagination will update when user navigates
+  const { data, isLoading, error } = useTableData(
+    databaseName,
+    schemaName,
+    tableName,
+    limit,
+    0, // Start with offset 0
+    true,
+    includeReferences,
+    debouncedFilters
+  );
+
+  const tableData = data?.data;
+  
+  // Get totalRows from response (defaults to 0 if not available yet)
+  // Pagination hook can handle totalRows = 0 initially
+  const totalRows = tableData?.totalRows || 0;
+
+  // Use pagination hook (totalRows will update when tableData loads)
   const pagination = useTablePagination({
     totalRows,
     limit,
@@ -122,40 +130,43 @@ export function TableDataView({
     }, []),
   });
 
-  // Fetch data with pagination (server-side filters)
-  const { data, isLoading, error } = useTableData(
+  // Fetch data with pagination when offset changes (only if offset > 0 to avoid duplicate call)
+  const { data: paginatedData, isLoading: isPaginatedLoading, error: paginatedError } = useTableData(
     databaseName,
     schemaName,
     tableName,
     limit,
     pagination.offset,
-    true,
+    pagination.offset > 0, // Only fetch if offset > 0 (avoid duplicate call when offset = 0)
     includeReferences,
     debouncedFilters
   );
 
-  const tableData = data?.data;
+  // Use paginated data if offset > 0, otherwise use initial data
+  const finalTableData = pagination.offset > 0 ? paginatedData?.data : tableData;
+  const finalIsLoading = pagination.offset > 0 ? isPaginatedLoading : isLoading;
+  const finalError = pagination.offset > 0 ? paginatedError : error;
   
-  // Merge relationships: prefer from tableData (when includeReferences=true), fallback to relationshipsData
+  // Merge relationships: prefer from finalTableData (when includeReferences=true), fallback to relationshipsData
   const relationships = useMemo(() => {
-    // If includeReferences is true, relationships should come from tableData
-    if (includeReferences && tableData?.relationships && Array.isArray(tableData.relationships)) {
-      return sortRelationships(tableData.relationships);
+    // If includeReferences is true, relationships should come from finalTableData
+    if (includeReferences && finalTableData?.relationships && Array.isArray(finalTableData.relationships)) {
+      return sortRelationships(finalTableData.relationships);
     }
     // Otherwise, use relationships from useTableRelationships hook
     const rels = relationshipsData?.data?.relationships || [];
     return sortRelationships(rels);
-  }, [includeReferences, tableData, relationshipsData?.data?.relationships]);
+  }, [includeReferences, finalTableData, relationshipsData?.data?.relationships]);
   const tableRows = useMemo(
-    () => (tableData?.rows ? [...tableData.rows] : []),
-    [tableData]
+    () => (finalTableData?.rows ? [...finalTableData.rows] : []),
+    [finalTableData]
   );
-  const filteredRowCount = tableData?.filteredRowCount ?? tableRows.length;
+  const filteredRowCount = finalTableData?.filteredRowCount ?? tableRows.length;
 
   const visibleColumns = useMemo(() => {
-    if (!tableData?.columns) return [];
-    return filterHiddenColumns(tableData.columns);
-  }, [tableData]);
+    if (!finalTableData?.columns) return [];
+    return filterHiddenColumns(finalTableData.columns);
+  }, [finalTableData]);
 
   const dataQuality = useMemo(
     () =>
@@ -191,10 +202,10 @@ export function TableDataView({
 
   // Log when table data is loaded
   useEffect(() => {
-    if (tableData && flowLog) {
+    if (finalTableData && flowLog) {
       // Log detailed table data information
-      const columnNames = tableData.columns.map((col) => String(col));
-      const sampleRows = tableData.rows.slice(0, 3).map((row) => {
+      const columnNames = finalTableData.columns.map((col) => String(col));
+      const sampleRows = finalTableData.rows.slice(0, 3).map((row) => {
         const sample: Record<string, unknown> = {};
         columnNames.slice(0, 5).forEach((col) => {
           const value = row[col];
@@ -212,26 +223,26 @@ export function TableDataView({
       });
 
       flowLog.success("Table data loaded", {
-        rowsLoaded: tableData.rows.length,
-        totalRows: tableData.totalRows,
+        rowsLoaded: finalTableData.rows.length,
+        totalRows: finalTableData.totalRows,
         columns: {
-          count: tableData.columns.length,
+          count: finalTableData.columns.length,
           names: columnNames,
         },
         offset: pagination.offset,
         limit,
         includeReferences,
-        hasMore: tableData.hasMore,
+        hasMore: finalTableData.hasMore,
         sampleRows: sampleRows.length > 0 ? sampleRows : null,
         relationshipsCount: relationships.length,
       });
 
       // Log additional info about data
-      if (tableData.rows.length > 0) {
+      if (finalTableData.rows.length > 0) {
         flowLog.info("Table data details", {
-          firstRowKeys: Object.keys(tableData.rows[0]),
+          firstRowKeys: Object.keys(finalTableData.rows[0]),
           dataTypes: columnNames.slice(0, 10).map((col) => {
-            const firstValue = tableData.rows[0]?.[col];
+            const firstValue = finalTableData.rows[0]?.[col];
             return {
               column: col,
               type:
@@ -250,7 +261,7 @@ export function TableDataView({
       }
     }
   }, [
-    tableData,
+    finalTableData,
     pagination.offset,
     limit,
     includeReferences,
@@ -272,26 +283,26 @@ export function TableDataView({
 
   useEffect(() => {
     // Only log error if component is mounted and error is new
-    if (error && flowLog && isMountedRef.current) {
+    if (finalError && flowLog && isMountedRef.current) {
       // Create a unique key for this error to avoid logging the same error multiple times
-      const errorKey = error instanceof Error 
-        ? `${error.message}-${error.stack?.substring(0, 50)}` 
-        : String(error);
+      const errorKey = finalError instanceof Error 
+        ? `${finalError.message}-${finalError.stack?.substring(0, 50)}` 
+        : String(finalError);
       
       // Only log if this is a new error (different from the last logged one)
       if (errorLoggedRef.current !== errorKey) {
         errorLoggedRef.current = errorKey;
-        flowLog.error("Error loading table data", error);
+        flowLog.error("Error loading table data", finalError);
         // Notify parent component about the error
         if (onError) {
-          onError(schemaName, tableName, error);
+          onError(schemaName, tableName, finalError);
         }
       }
-    } else if (!error && isMountedRef.current) {
+    } else if (!finalError && isMountedRef.current) {
       // Reset error log tracking when error is cleared
       errorLoggedRef.current = null;
     }
-  }, [error, flowLog, schemaName, tableName, onError]);
+  }, [finalError, flowLog, schemaName, tableName, onError]);
 
   // Create a debounced filter key for forcing re-render when debounced filters change
   const debouncedFilterKey = useMemo(() => {
@@ -305,14 +316,14 @@ export function TableDataView({
 
   // Log when filtered rows change (from API response)
   useEffect(() => {
-    if (flowLog && tableData) {
+    if (flowLog && finalTableData) {
       const activeFiltersList = Object.entries(debouncedFilters)
         .filter(([, v]) => v?.trim() !== "")
         .map(([col, val]) => ({ column: col, value: val }));
       flowLog.debug("Filtered rows updated", {
-        filteredCount: tableData.rows.length,
-        totalRows: tableData.totalRows,
-        filteredRowCount: tableData.filteredRowCount ?? tableData.rows.length,
+        filteredCount: finalTableData?.rows.length || 0,
+        totalRows: finalTableData?.totalRows || 0,
+        filteredRowCount: finalTableData?.filteredRowCount ?? finalTableData?.rows.length ?? 0,
         hasActiveFilters,
         activeFilterCount,
         activeFilters: activeFiltersList,
@@ -322,7 +333,7 @@ export function TableDataView({
       });
     }
   }, [
-    tableData,
+    finalTableData,
     debouncedFilters,
     filters,
     hasActiveFilters,
@@ -401,7 +412,7 @@ export function TableDataView({
             </h2>
             <p className="text-xs text-muted-foreground">
               Database: {databaseName}
-              {tableData && (
+              {finalTableData && (
                 <span className="ml-2">
                   • {visibleColumns.length} columns
                 </span>
@@ -463,26 +474,26 @@ export function TableDataView({
 
       {/* Content */}
       <div className="flex-1 overflow-hidden flex flex-col min-h-0 max-h-full">
-        {isLoading ? (
+        {finalIsLoading ? (
           <div className="flex items-center justify-center py-12">
             <Loader2 className="h-6 w-6 animate-spin text-primary" />
             <span className="ml-2 text-sm text-muted-foreground">
               Loading table data...
             </span>
           </div>
-        ) : error ? (
+        ) : finalError ? (
           <div className="flex flex-col items-center justify-center py-12 px-4">
             <Database className="h-12 w-12 text-destructive mb-4 opacity-50" />
             <p className="text-sm font-medium text-foreground mb-2">
               Error loading table data
             </p>
             <p className="text-xs text-muted-foreground text-center">
-              {error instanceof Error
-                ? error.message
+              {finalError instanceof Error
+                ? finalError.message
                 : "Unknown error occurred"}
             </p>
           </div>
-        ) : tableData ? (
+        ) : finalTableData ? (
           <>
             {/* Filter Controls */}
             <div className="border-b border-border p-2 flex items-center justify-between gap-2">
@@ -570,14 +581,14 @@ export function TableDataView({
                         <span className="text-primary"> (filtered)</span>
                       )}
                       <span className="ml-1">
-                        ({tableData.columns.length} columns)
+                        ({finalTableData?.columns.length || 0} columns)
                       </span>
                     </>
                   ) : (
                     <>
                       Showing {pagination.offset + 1} -{" "}
                       {Math.min(pagination.offset + limit, totalRows)} of{" "}
-                      {totalRows} rows ({tableData.columns.length} columns)
+                      {totalRows} rows ({finalTableData?.columns.length || 0} columns)
                     </>
                   )}
                 </div>
@@ -639,7 +650,7 @@ export function TableDataView({
                   variant="outline"
                   size="sm"
                   onClick={pagination.handleNext}
-                  disabled={!tableData?.hasMore}
+                  disabled={!finalTableData?.hasMore}
                 >
                   <span className="hidden sm:inline">Next</span>
                   <ChevronRight className="h-4 w-4" />
@@ -649,7 +660,7 @@ export function TableDataView({
                   size="sm"
                   onClick={pagination.handleLastPage}
                   disabled={
-                    !tableData?.hasMore ||
+                    !finalTableData?.hasMore ||
                     pagination.currentPage >= pagination.totalPages
                   }
                   title="Last page"

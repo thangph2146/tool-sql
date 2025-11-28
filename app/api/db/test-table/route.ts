@@ -66,18 +66,44 @@ export async function GET(request: NextRequest) {
 
     // Try to query 1 row from the table to test accessibility
     try {
-      // Escape schema and table names for SQL Server
-      const escapedSchema = escapeSqlIdentifier(schemaName!);
-      const escapedTable = escapeSqlIdentifier(tableName!);
-      
       // Always use merged config for consistency: customConfig || envConfig || defaults
       const sqlConfig = convertToSqlConfig(dbConfig);
       const tempPool = new sql.ConnectionPool(sqlConfig);
       await tempPool.connect();
+      
       try {
+        // Use QUOTENAME SQL function to properly escape identifiers with special characters
+        // This handles table names with quotes like '1409_Chứng chỉ' correctly
+        let quotedSchema: string;
+        let quotedTable: string;
+        
+        try {
+          // Get properly quoted names using QUOTENAME (handles special characters including quotes)
+          const quotedSchemaResult = await tempPool.request()
+            .input('name', sql.NVarChar, schemaName!)
+            .query<{ quoted: string }>(`SELECT QUOTENAME(@name, '[') as quoted`);
+          const quotedTableResult = await tempPool.request()
+            .input('name', sql.NVarChar, tableName!)
+            .query<{ quoted: string }>(`SELECT QUOTENAME(@name, '[') as quoted`);
+          
+          quotedSchema = quotedSchemaResult.recordset[0]?.quoted || `[${escapeSqlIdentifier(schemaName!)}]`;
+          quotedTable = quotedTableResult.recordset[0]?.quoted || `[${escapeSqlIdentifier(tableName!)}]`;
+        } catch (quoteError) {
+          // Fallback to bracket notation if QUOTENAME fails
+          flowLog.warn(`QUOTENAME failed, using bracket notation`, { 
+            error: quoteError instanceof Error ? quoteError.message : String(quoteError),
+            schema: schemaName,
+            table: tableName
+          });
+          const escapedSchema = escapeSqlIdentifier(schemaName!);
+          const escapedTable = escapeSqlIdentifier(tableName!);
+          quotedSchema = `[${escapedSchema}]`;
+          quotedTable = `[${escapedTable}]`;
+        }
+        
         const testResult = await tempPool.request().query(`
           SELECT TOP 1 *
-          FROM [${escapedSchema}].[${escapedTable}]
+          FROM ${quotedSchema}.${quotedTable}
         `);
 
         // Get column count from first row if available

@@ -22,7 +22,6 @@ export const DEFAULT_TABLE_LIST_LIMIT = 50;
  * Add column names here to exclude them from API responses and table views
  */
 export const HIDDEN_COLUMNS = [
-  'HinhAnh', // Image column - temporarily hidden
   // Add more column names here as needed
 ] as const;
 
