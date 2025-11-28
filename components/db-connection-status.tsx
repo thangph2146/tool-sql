@@ -3,10 +3,10 @@
 import { useMemo, useState, useEffect } from 'react';
 import { getEnabledDatabases } from '@/lib/db-config';
 import type { DatabaseName } from '@/lib/db-config';
-import { DatabaseCard } from './database/database-card';
-import { DatabaseHeader } from './database/database-header';
-import { TableComparisonView } from './database/table-comparison-view';
-import { SelectedTablesBanner } from './database/selected-tables-banner';
+import { DatabaseCard } from './database/connection/database-card';
+import { DatabaseHeader } from './database/connection/database-header';
+import { TableComparisonView } from './database/comparison/table-comparison-view';
+import { SelectedTablesBanner } from './database/shared/selected-tables-banner';
 
 export function DbConnectionStatus() {
   // Memoize enabled databases from config
