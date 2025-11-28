@@ -20,5 +20,8 @@ export const FLOW_NAMES = {
   
   API_GET_TABLE_RELATIONSHIPS: (database: string) =>
     `API_GET_TABLE_RELATIONSHIPS_${database.toUpperCase()}`,
+  
+  API_GET_TABLE_STATS: (database: string) =>
+    `API_GET_TABLE_STATS_${database.toUpperCase()}`,
 } as const;
 

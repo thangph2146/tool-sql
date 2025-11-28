@@ -34,7 +34,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const flowName = FLOW_NAMES.API_GET_TABLE_STATS?.(databaseName) || `API_GET_TABLE_STATS_${databaseName.toUpperCase()}`;
+  const flowName = FLOW_NAMES.API_GET_TABLE_STATS(databaseName);
   const flowId = logger.startFlow(flowName, {
     database: databaseName,
     schema: schemaName,
