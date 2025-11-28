@@ -2,14 +2,17 @@ import sql from 'mssql';
 import { logger } from './logger';
 import {
   type DatabaseName,
+  type DatabaseConfigItem,
   getDatabaseConfig,
   getDatabaseConfigSystem,
   validateDatabaseConfig,
   getConfigSummary,
 } from './db-config';
+import { DEFAULT_TABLE_LIMIT, DEFAULT_TABLE_PAGE } from './constants/table-constants';
+import { DEFAULT_CONNECTION_TIMEOUT, DEFAULT_REQUEST_TIMEOUT } from './constants/db-constants';
 
-// Re-export DatabaseName for backward compatibility
-export type { DatabaseName } from './db-config';
+// Re-export DatabaseName and DatabaseConfigItem for backward compatibility
+export type { DatabaseName, DatabaseConfigItem } from './db-config';
 
 /**
  * Escape SQL Server identifier (table name, schema name, column name)
@@ -45,30 +48,34 @@ interface DatabaseConfig {
 
 /**
  * Convert DatabaseConfigItem to sql.config format
+ * Exported for use in API routes
  */
-function convertToSqlConfig(dbConfig: ReturnType<typeof getDatabaseConfig>): sql.config {
+export function convertToSqlConfig(dbConfig: ReturnType<typeof getDatabaseConfig>): sql.config {
   // Split server name and instance name
-  const hasInstanceInServer = dbConfig.server.includes('\\');
-  let serverName = dbConfig.server;
+  // Use || operator to ensure no null/undefined
+  const server = dbConfig.server || '';
+  const hasInstanceInServer = server.includes('\\');
+  let serverName = server;
   let extractedInstanceName: string | undefined;
   
   if (hasInstanceInServer) {
-    const parts = dbConfig.server.split('\\');
-    serverName = parts[0];
-    extractedInstanceName = parts[1];
+    const parts = server.split('\\');
+    serverName = parts[0] || '';
+    extractedInstanceName = parts[1] || undefined;
   }
   
   // Logic: If instance name exists, prioritize using instance name (via SQL Browser)
   // Only use port directly when there's no instance name (default instance)
-  const finalInstanceName = dbConfig.instanceName || extractedInstanceName;
-  const usePortDirectly = dbConfig.port && !finalInstanceName;
+  // Use || operator: instanceName || extractedInstanceName || undefined
+  const finalInstanceName = dbConfig.instanceName || extractedInstanceName || undefined;
+  const usePortDirectly = !!(dbConfig.port && !finalInstanceName);
 
   const baseConfig: sql.config = {
-    server: serverName,
-    database: dbConfig.database,
-    connectionTimeout: dbConfig.connectionTimeout || 30000,
-    requestTimeout: dbConfig.requestTimeout || 30000,
-    ...(usePortDirectly ? { port: dbConfig.port } : {}),
+    server: serverName || '',
+    database: dbConfig.database || '',
+    connectionTimeout: dbConfig.connectionTimeout || DEFAULT_CONNECTION_TIMEOUT,
+    requestTimeout: dbConfig.requestTimeout || DEFAULT_REQUEST_TIMEOUT,
+    ...(usePortDirectly && dbConfig.port ? { port: dbConfig.port } : {}),
     options: {
       encrypt: false,
       trustServerCertificate: true,
@@ -427,6 +434,84 @@ export async function executeProcedure<T = sql.IResult<unknown>>(
 /**
  * Test connection to a specific database
  */
+/**
+ * Test connection with custom config (for user-provided configs)
+ */
+export async function testConnectionWithConfig(
+  config: DatabaseConfigItem,
+  flowId?: string
+): Promise<boolean> {
+  const flowLog = flowId ? logger.createFlowLogger(flowId) : null;
+  let tempPool: sql.ConnectionPool | null = null;
+  
+  try {
+    const logData = {
+      server: config.server,
+      database: config.database,
+    };
+    
+    if (flowLog) {
+      flowLog.info(`Testing connection with custom config`, logData);
+    } else {
+      logger.info(`Testing connection with custom config...`, logData, 'DB_TEST');
+    }
+    
+    // Convert config to sql.config format
+    const sqlConfig = convertToSqlConfig(config);
+    
+    // Create temporary connection pool
+    tempPool = new sql.ConnectionPool(sqlConfig);
+    await tempPool.connect();
+    
+    // Test query
+    const result = await tempPool.request().query('SELECT 1 as test');
+    const isConnected = result.recordset.length > 0;
+    
+    if (isConnected) {
+      if (flowLog) {
+        flowLog.success(`Connection test successful`);
+      } else {
+        logger.success(`Connection test successful with custom config`, logData, 'DB_TEST');
+      }
+    } else {
+      if (flowLog) {
+        flowLog.warn(`Connection test returned no results`);
+      } else {
+        logger.warn(`Connection test returned no results with custom config`, logData, 'DB_TEST');
+      }
+    }
+    
+    // Close temporary pool
+    await tempPool.close();
+    tempPool = null;
+    
+    return isConnected;
+  } catch (error) {
+    const logData = {
+      error,
+      server: config.server,
+      database: config.database,
+    };
+    
+    if (flowLog) {
+      flowLog.error(`Connection test error`, error);
+    } else {
+      logger.error(`Connection test error with custom config`, logData, 'DB_TEST');
+    }
+    
+    // Ensure pool is closed on error
+    if (tempPool) {
+      try {
+        await tempPool.close();
+      } catch {
+        // Ignore close errors
+      }
+    }
+    
+    return false;
+  }
+}
+
 export async function testConnection(databaseName: DatabaseName, flowId?: string): Promise<boolean> {
   const flowLog = flowId ? logger.createFlowLogger(flowId) : null;
   
@@ -521,6 +606,213 @@ export interface TableInfo {
   TABLE_NAME: string;
   TABLE_TYPE: string;
   ROW_COUNT?: number;
+  rowCount?: number | null;
+  columnCount?: number | null;
+  relationshipCount?: number | null;
+}
+
+/**
+ * Query with custom config (creates temporary connection pool)
+ */
+export async function queryWithConfig<T = sql.IResult<unknown>>(
+  config: DatabaseConfigItem,
+  queryString: string,
+  params?: Record<string, unknown>
+): Promise<sql.IResult<T>> {
+  const startTime = Date.now();
+  let tempPool: sql.ConnectionPool | null = null;
+  
+  try {
+    // Convert config to sql.config format
+    const sqlConfig = convertToSqlConfig(config);
+    
+    // Create temporary connection pool
+    tempPool = new sql.ConnectionPool(sqlConfig);
+    await tempPool.connect();
+    
+    const request = tempPool.request();
+    
+    // Add parameters if provided
+    if (params) {
+      Object.keys(params).forEach((key) => {
+        request.input(key, params[key]);
+      });
+    }
+    
+    const result = await request.query<T>(queryString);
+    const duration = Date.now() - startTime;
+    logger.logQuery(queryString, params, duration, config.name);
+    
+    // Close temporary pool
+    await tempPool.close();
+    tempPool = null;
+    
+    return result;
+  } catch (error) {
+    const duration = Date.now() - startTime;
+    logger.error('Query execution error with custom config', { 
+      server: config.server,
+      database: config.database,
+      query: queryString, 
+      params, 
+      duration, 
+      error 
+    }, 'DB_QUERY');
+    
+    // Ensure pool is closed on error
+    if (tempPool) {
+      try {
+        await tempPool.close();
+      } catch {
+        // Ignore close errors
+      }
+    }
+    
+    throw error;
+  }
+}
+
+/**
+ * Get list of tables from a specific database using custom config
+ * This function creates a temporary connection pool with the provided config
+ */
+export async function getTablesWithConfig(
+  config: DatabaseConfigItem,
+  flowId?: string,
+  options?: {
+    filterText?: string;
+    limit?: number;
+    offset?: number;
+  }
+): Promise<{ tables: TableInfo[]; totalCount: number }> {
+  const flowLog = flowId ? logger.createFlowLogger(flowId) : null;
+  let tempPool: sql.ConnectionPool | null = null;
+  
+  try {
+    const { filterText = '', limit, offset = 0 } = options || {};
+    const hasFilter = filterText.trim().length > 0;
+    const hasPagination = limit !== undefined && limit > 0;
+    
+    if (flowLog) {
+      flowLog.info(`Querying INFORMATION_SCHEMA.TABLES with custom config`, {
+        hasFilter,
+        hasPagination,
+        limit,
+        offset,
+      });
+    } else {
+      logger.info(`Fetching tables with custom config...`, {
+        server: config.server,
+        database: config.database,
+        hasFilter,
+        hasPagination,
+      }, 'DB_TABLES');
+    }
+
+    // Convert config to sql.config format
+    const sqlConfig = convertToSqlConfig(config);
+    
+    // Create temporary connection pool
+    tempPool = new sql.ConnectionPool(sqlConfig);
+    await tempPool.connect();
+
+    // Build WHERE clause for filtering
+    const escapedFilterText = filterText.trim().replace(/'/g, "''");
+    const whereClause = hasFilter
+      ? `AND (t.TABLE_NAME LIKE N'%${escapedFilterText}%' OR t.TABLE_SCHEMA LIKE N'%${escapedFilterText}%')`
+      : '';
+
+    // Get total count first (for pagination)
+    const countResult = await tempPool.request().query<{ total: number }>(`
+      SELECT COUNT(*) as total
+      FROM INFORMATION_SCHEMA.TABLES t
+      WHERE t.TABLE_TYPE = 'BASE TABLE'
+      ${whereClause}
+    `);
+    const totalCount = countResult.recordset[0]?.total || 0;
+
+    // Build query with pagination
+    const orderBy = 'ORDER BY t.TABLE_SCHEMA, t.TABLE_NAME';
+    const paginationClause = hasPagination
+      ? `OFFSET ${offset} ROWS FETCH NEXT ${limit} ROWS ONLY`
+      : '';
+
+    // Query tables from the current database context
+    const result = await tempPool.request().query<TableInfo & { CURRENT_DB: string }>(`
+      SELECT 
+        t.TABLE_SCHEMA,
+        t.TABLE_NAME,
+        t.TABLE_TYPE,
+        DB_NAME() as CURRENT_DB
+      FROM INFORMATION_SCHEMA.TABLES t
+      WHERE t.TABLE_TYPE = 'BASE TABLE'
+      ${whereClause}
+      ${orderBy}
+      ${paginationClause}
+    `);
+
+    const tables = result.recordset;
+    
+    // Verify that tables are from the correct database
+    if (tables.length > 0) {
+      const currentDb = tables[0].CURRENT_DB;
+      const expectedDatabase = config.database;
+      if (currentDb && currentDb !== expectedDatabase) {
+        if (flowLog) {
+          flowLog.warn(`Database context mismatch: Expected ${expectedDatabase}, got ${currentDb}`);
+        } else {
+          logger.warn(`Database context mismatch detected. Expected ${expectedDatabase}, got ${currentDb}`, {
+            expected: expectedDatabase,
+            actual: currentDb,
+          }, 'DB_TABLES');
+        }
+      }
+    }
+    
+    // Remove CURRENT_DB from result before returning
+    const cleanedTables: TableInfo[] = tables.map((table) => ({
+      TABLE_SCHEMA: table.TABLE_SCHEMA,
+      TABLE_NAME: table.TABLE_NAME,
+      TABLE_TYPE: table.TABLE_TYPE,
+    }));
+    
+    if (flowLog) {
+      flowLog.success(`Fetched ${cleanedTables.length} tables (total: ${totalCount})`);
+    } else {
+      logger.success(`Successfully fetched ${cleanedTables.length} tables with custom config`, {
+        database: config.database,
+        tableCount: cleanedTables.length,
+        totalCount,
+      }, 'DB_TABLES');
+    }
+
+    // Close temporary pool
+    await tempPool.close();
+    tempPool = null;
+
+    return { tables: cleanedTables, totalCount };
+  } catch (error) {
+    if (flowLog) {
+      flowLog.error(`Error fetching tables`, error);
+    } else {
+      logger.error(`Error fetching tables with custom config`, {
+        error,
+        server: config.server,
+        database: config.database,
+      }, 'DB_TABLES');
+    }
+    
+    // Ensure pool is closed on error
+    if (tempPool) {
+      try {
+        await tempPool.close();
+      } catch {
+        // Ignore close errors
+      }
+    }
+    
+    throw error;
+  }
 }
 
 /**
@@ -635,6 +927,117 @@ export async function getTableRowCount(
 }
 
 /**
+ * Get table data with pagination using custom config
+ * Returns data from a specific table with limit and offset for pagination
+ */
+export async function getTableDataWithConfig(
+  config: DatabaseConfigItem,
+  schemaName: string,
+  tableName: string,
+  limit: number = DEFAULT_TABLE_LIMIT,
+  offset: number = DEFAULT_TABLE_PAGE,
+  flowId?: string
+): Promise<{
+  columns: string[];
+  rows: Record<string, unknown>[];
+  totalRows: number;
+  hasMore: boolean;
+}> {
+  const flowLog = flowId ? logger.createFlowLogger(flowId) : null;
+  
+  try {
+    if (flowLog) {
+      flowLog.info(`Getting total row count with custom config`);
+    } else {
+      logger.info(`Fetching data from table: ${schemaName}.${tableName} with custom config...`, {
+        server: config.server,
+        database: config.database,
+        schema: schemaName,
+        table: tableName,
+        limit,
+        offset,
+      }, 'DB_TABLE_DATA');
+    }
+
+    // Escape schema and table names for SQL Server
+    const escapedSchema = escapeSqlIdentifier(schemaName);
+    const escapedTable = escapeSqlIdentifier(tableName);
+
+    // Get total row count
+    const countResult = await queryWithConfig<{ total: number }>(config, `
+      SELECT COUNT(*) as total
+      FROM [${escapedSchema}].[${escapedTable}]
+    `);
+    const totalRows = countResult.recordset[0]?.total || 0;
+
+    if (flowLog) {
+      flowLog.info(`Total rows: ${totalRows}, fetching data with pagination (limit: ${limit}, offset: ${offset})`);
+    }
+
+    // Get table data with pagination
+    const dataResult = await queryWithConfig(config, `
+      SELECT TOP ${limit} *
+      FROM (
+        SELECT *, ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) as rn
+        FROM [${escapedSchema}].[${escapedTable}]
+      ) AS t
+      WHERE t.rn > ${offset}
+      ORDER BY t.rn
+    `);
+
+    // Get rows and remove ROW_NUMBER column
+    const rows = Array.from(dataResult.recordset).map((row: unknown) => {
+      const rowObj = row as Record<string, unknown>;
+      // Remove ROW_NUMBER column from result
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { rn: _rn, ...rest } = rowObj;
+      return rest;
+    });
+
+    // Get column names from first row (excluding 'rn')
+    const columns = rows.length > 0 
+      ? Object.keys(rows[0])
+      : [];
+
+    const hasMore = offset + rows.length < totalRows;
+
+    if (flowLog) {
+      flowLog.success(`Fetched ${rows.length} rows (${columns.length} columns)`);
+    } else {
+      logger.success(`Successfully fetched ${rows.length} rows from ${schemaName}.${tableName} with custom config`, {
+        server: config.server,
+        database: config.database,
+        schema: schemaName,
+        table: tableName,
+        rowsReturned: rows.length,
+        totalRows,
+        hasMore,
+      }, 'DB_TABLE_DATA');
+    }
+
+    return {
+      columns,
+      rows,
+      totalRows,
+      hasMore,
+    };
+  } catch (error) {
+    if (flowLog) {
+      flowLog.error(`Error fetching table data`, error);
+    } else {
+      logger.error(`Error fetching data from table: ${schemaName}.${tableName} with custom config`, {
+        error,
+        server: config.server,
+        database: config.database,
+        schema: schemaName,
+        table: tableName,
+      }, 'DB_TABLE_DATA');
+    }
+    throw error;
+  }
+}
+
+/**
  * Get table data with pagination
  * Returns data from a specific table with limit and offset for pagination
  */
@@ -642,8 +1045,8 @@ export async function getTableData(
   databaseName: DatabaseName,
   schemaName: string,
   tableName: string,
-  limit: number = 100,
-  offset: number = 0,
+  limit: number = DEFAULT_TABLE_LIMIT,
+  offset: number = DEFAULT_TABLE_PAGE,
   flowId?: string
 ): Promise<{
   columns: string[];
@@ -756,6 +1159,81 @@ export interface ForeignKeyInfo {
 }
 
 /**
+ * Get foreign key relationships for a specific table using custom config
+ */
+export async function getTableForeignKeysWithConfig(
+  config: DatabaseConfigItem,
+  schemaName: string,
+  tableName: string,
+  flowId?: string
+): Promise<ForeignKeyInfo[]> {
+  const flowLog = flowId ? logger.createFlowLogger(flowId) : null;
+  
+  try {
+    if (flowLog) {
+      flowLog.info(`Querying sys.foreign_keys for ${schemaName}.${tableName} with custom config`);
+    } else {
+      logger.info(`Fetching foreign keys for table: ${schemaName}.${tableName} with custom config...`, {
+        server: config.server,
+        database: config.database,
+        schema: schemaName,
+        table: tableName,
+      }, 'DB_FOREIGN_KEYS');
+    }
+
+    // Escape schema and table names for SQL injection prevention
+    const escapedSchema = escapeSqlIdentifier(schemaName).replace(/'/g, "''");
+    const escapedTable = escapeSqlIdentifier(tableName).replace(/'/g, "''");
+    
+    const result = await queryWithConfig<ForeignKeyInfo>(config, `
+      SELECT 
+        fk.name AS FK_NAME,
+        OBJECT_SCHEMA_NAME(fk.parent_object_id) AS FK_SCHEMA,
+        OBJECT_NAME(fk.parent_object_id) AS FK_TABLE,
+        COL_NAME(fkc.parent_object_id, fkc.parent_column_id) AS FK_COLUMN,
+        OBJECT_SCHEMA_NAME(fk.referenced_object_id) AS PK_SCHEMA,
+        OBJECT_NAME(fk.referenced_object_id) AS PK_TABLE,
+        COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id) AS PK_COLUMN
+      FROM sys.foreign_keys AS fk
+      INNER JOIN sys.foreign_key_columns AS fkc 
+        ON fk.object_id = fkc.constraint_object_id
+      WHERE OBJECT_SCHEMA_NAME(fk.parent_object_id) = N'${escapedSchema}'
+        AND OBJECT_NAME(fk.parent_object_id) = N'${escapedTable}'
+      ORDER BY fk.name, fkc.constraint_column_id
+    `);
+
+    const foreignKeys = result.recordset;
+
+    if (flowLog) {
+      flowLog.success(`Fetched ${foreignKeys.length} foreign keys`);
+    } else {
+      logger.success(`Successfully fetched ${foreignKeys.length} foreign keys for ${schemaName}.${tableName} with custom config`, {
+        server: config.server,
+        database: config.database,
+        schema: schemaName,
+        table: tableName,
+        foreignKeyCount: foreignKeys.length,
+      }, 'DB_FOREIGN_KEYS');
+    }
+
+    return foreignKeys;
+  } catch (error) {
+    if (flowLog) {
+      flowLog.error(`Error fetching foreign keys`, error);
+    } else {
+      logger.error(`Error fetching foreign keys for table: ${schemaName}.${tableName} with custom config`, {
+        error,
+        server: config.server,
+        database: config.database,
+        schema: schemaName,
+        table: tableName,
+      }, 'DB_FOREIGN_KEYS');
+    }
+    throw error;
+  }
+}
+
+/**
  * Get foreign key relationships for a specific table
  */
 export async function getTableForeignKeys(
@@ -822,6 +1300,286 @@ export async function getTableForeignKeys(
         schema: schemaName,
         table: tableName,
       }, 'DB_FOREIGN_KEYS');
+    }
+    throw error;
+  }
+}
+
+/**
+ * Get table statistics (row count, column count, relationship count) using custom config
+ * This version uses a shared connection pool for better performance
+ */
+export async function getTableStatsWithConfig(
+  config: DatabaseConfigItem,
+  schemaName: string,
+  tableName: string,
+  flowId?: string,
+  sharedPool?: sql.ConnectionPool
+): Promise<{
+  rowCount: number;
+  columnCount: number;
+  relationshipCount: number;
+}> {
+  const flowLog = flowId ? logger.createFlowLogger(flowId) : null;
+  let tempPool: sql.ConnectionPool | null = null;
+  const pool = sharedPool || null;
+  let shouldClosePool = false;
+  
+  try {
+    if (flowLog && !sharedPool) {
+      flowLog.info(`Getting table stats for ${schemaName}.${tableName} with custom config`);
+    }
+
+    // Escape schema and table names for SQL injection prevention
+    // For bracket notation (FROM clause), remove quotes if present
+    const escapedSchema = escapeSqlIdentifier(schemaName);
+    const escapedTable = escapeSqlIdentifier(tableName);
+    
+    // For string comparison in WHERE clause, use original names (with quotes if present)
+    // SQL Server will handle quotes in string literals correctly
+    // Escape single quotes for SQL injection prevention
+    const escapedSchemaForString = schemaName.replace(/'/g, "''");
+    const escapedTableForString = tableName.replace(/'/g, "''");
+
+    // Use shared pool if provided, otherwise create temporary pool
+    if (!pool) {
+      const sqlConfig = convertToSqlConfig(config);
+      tempPool = new sql.ConnectionPool(sqlConfig);
+      await tempPool.connect();
+      shouldClosePool = true;
+    }
+    const activePool = pool || tempPool!;
+
+    // Get row count, column count, and relationship count in parallel
+    // Use QUOTENAME SQL function to properly escape identifiers with special characters
+    // First, get the properly quoted names using QUOTENAME
+    let quotedSchema: string;
+    let quotedTable: string;
+    try {
+      const quotedSchemaResult = await activePool.request()
+        .input('name', sql.NVarChar, schemaName)
+        .query<{ quoted: string }>(`SELECT QUOTENAME(@name, '[') as quoted`);
+      const quotedTableResult = await activePool.request()
+        .input('name', sql.NVarChar, tableName)
+        .query<{ quoted: string }>(`SELECT QUOTENAME(@name, '[') as quoted`);
+      
+      quotedSchema = quotedSchemaResult.recordset[0]?.quoted || `[${escapedSchema}]`;
+      quotedTable = quotedTableResult.recordset[0]?.quoted || `[${escapedTable}]`;
+    } catch (quoteError) {
+      // Fallback to bracket notation if QUOTENAME fails
+      if (flowLog) {
+        flowLog.warn(`QUOTENAME failed, using bracket notation`, { 
+          error: quoteError instanceof Error ? quoteError.message : String(quoteError),
+          schema: schemaName,
+          table: tableName
+        });
+      }
+      quotedSchema = `[${escapedSchema}]`;
+      quotedTable = `[${escapedTable}]`;
+    }
+
+    const [rowCountResult, columnCountResult, outgoingFKs, incomingFKs] = await Promise.all([
+      // Row count - use QUOTENAME result for proper escaping
+      activePool.request().query<{ row_count: number }>(`
+        SELECT COUNT(*) as row_count
+        FROM ${quotedSchema}.${quotedTable}
+      `).catch(async (err) => {
+        // If query fails, log and rethrow
+        if (flowLog) {
+          flowLog.error(`Failed to get row count for ${schemaName}.${tableName}`, { 
+            error: err instanceof Error ? err.message : String(err),
+            quotedSchema,
+            quotedTable
+          });
+        }
+        throw err;
+      }),
+      // Column count - use original table name (with quotes if present) for string comparison
+      activePool.request().query<{ column_count: number }>(`
+        SELECT COUNT(*) as column_count
+        FROM INFORMATION_SCHEMA.COLUMNS
+        WHERE TABLE_SCHEMA = N'${escapedSchemaForString}'
+          AND TABLE_NAME = N'${escapedTableForString}'
+      `).catch(async (err) => {
+        // If query fails, log and return 0 (will be handled as error)
+        if (flowLog) {
+          flowLog.error(`Failed to get column count for ${schemaName}.${tableName}`, { 
+            error: err instanceof Error ? err.message : String(err),
+            schemaName,
+            tableName,
+            escapedSchemaForString,
+            escapedTableForString
+          });
+        }
+        // Return a result with 0 to indicate failure
+        return { recordset: [{ column_count: 0 }] };
+      }),
+      // Outgoing foreign keys
+      activePool.request().query<ForeignKeyInfo>(`
+        SELECT 
+          fk.name AS FK_NAME,
+          OBJECT_SCHEMA_NAME(fk.parent_object_id) AS FK_SCHEMA,
+          OBJECT_NAME(fk.parent_object_id) AS FK_TABLE,
+          COL_NAME(fkc.parent_object_id, fkc.parent_column_id) AS FK_COLUMN,
+          OBJECT_SCHEMA_NAME(fk.referenced_object_id) AS PK_SCHEMA,
+          OBJECT_NAME(fk.referenced_object_id) AS PK_TABLE,
+          COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id) AS PK_COLUMN
+        FROM sys.foreign_keys AS fk
+        INNER JOIN sys.foreign_key_columns AS fkc 
+          ON fk.object_id = fkc.constraint_object_id
+        WHERE OBJECT_SCHEMA_NAME(fk.parent_object_id) = N'${escapedSchemaForString}'
+          AND OBJECT_NAME(fk.parent_object_id) = N'${escapedTableForString}'
+        ORDER BY fk.name, fkc.constraint_column_id
+      `),
+      // Incoming foreign keys
+      activePool.request().query<ForeignKeyInfo>(`
+        SELECT 
+          fk.name AS FK_NAME,
+          OBJECT_SCHEMA_NAME(fk.parent_object_id) AS FK_SCHEMA,
+          OBJECT_NAME(fk.parent_object_id) AS FK_TABLE,
+          COL_NAME(fkc.parent_object_id, fkc.parent_column_id) AS FK_COLUMN,
+          OBJECT_SCHEMA_NAME(fk.referenced_object_id) AS PK_SCHEMA,
+          OBJECT_NAME(fk.referenced_object_id) AS PK_TABLE,
+          COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id) AS PK_COLUMN
+        FROM sys.foreign_keys AS fk
+        INNER JOIN sys.foreign_key_columns AS fkc 
+          ON fk.object_id = fkc.constraint_object_id
+        WHERE OBJECT_SCHEMA_NAME(fk.referenced_object_id) = N'${escapedSchemaForString}'
+          AND OBJECT_NAME(fk.referenced_object_id) = N'${escapedTableForString}'
+        ORDER BY fk.name, fkc.constraint_column_id
+      `),
+    ]);
+
+    const rowCount = rowCountResult.recordset[0]?.row_count ?? 0;
+    const columnCount = columnCountResult.recordset[0]?.column_count ?? 0;
+    
+    // Log warning if column count is 0 (might indicate query failure for tables with special characters)
+    if (columnCount === 0 && flowLog) {
+      flowLog.warn(`Column count is 0 for ${schemaName}.${tableName} - this might indicate a query issue`, {
+        schemaName,
+        tableName,
+        rowCount,
+        escapedTableForString
+      });
+    }
+    
+    // Combine and deduplicate relationships
+    const relationshipsMap = new Map<string, ForeignKeyInfo>();
+    [...outgoingFKs.recordset, ...incomingFKs.recordset].forEach((rel) => {
+      const key = `${rel.FK_NAME}||${rel.FK_SCHEMA}.${rel.FK_TABLE}.${rel.FK_COLUMN}||${rel.PK_SCHEMA}.${rel.PK_TABLE}.${rel.PK_COLUMN}`;
+      if (!relationshipsMap.has(key)) {
+        relationshipsMap.set(key, rel);
+      }
+    });
+    const relationshipCount = relationshipsMap.size;
+
+    // Close temporary pool if we created it
+    if (shouldClosePool && tempPool) {
+      await tempPool.close();
+      tempPool = null;
+    }
+
+    return {
+      rowCount,
+      columnCount,
+      relationshipCount,
+    };
+  } catch (error) {
+    // Close temporary pool on error
+    if (shouldClosePool && tempPool) {
+      try {
+        await tempPool.close();
+      } catch {
+        // Ignore close errors
+      }
+    }
+    
+    if (flowLog) {
+      flowLog.error(`Error getting table stats`, error);
+    } else {
+      logger.error(`Error getting table stats for ${schemaName}.${tableName} with custom config`, {
+        error,
+        server: config.server,
+        database: config.database,
+        schema: schemaName,
+        table: tableName,
+      }, 'DB_TABLE_STATS');
+    }
+    throw error;
+  }
+}
+
+/**
+ * Get foreign keys that reference the current table (incoming relationships) using custom config
+ * Returns relationships where other tables have FK pointing to this table's PK
+ */
+export async function getTableReferencedByWithConfig(
+  config: DatabaseConfigItem,
+  schemaName: string,
+  tableName: string,
+  flowId?: string
+): Promise<ForeignKeyInfo[]> {
+  const flowLog = flowId ? logger.createFlowLogger(flowId) : null;
+  
+  try {
+    if (flowLog) {
+      flowLog.info(`Querying sys.foreign_keys for tables referencing ${schemaName}.${tableName} with custom config`);
+    } else {
+      logger.info(`Fetching incoming foreign keys for table: ${schemaName}.${tableName} with custom config...`, {
+        server: config.server,
+        database: config.database,
+        schema: schemaName,
+        table: tableName,
+      }, 'DB_FOREIGN_KEYS_INCOMING');
+    }
+
+    // Escape schema and table names for SQL injection prevention
+    const escapedSchema = escapeSqlIdentifier(schemaName).replace(/'/g, "''");
+    const escapedTable = escapeSqlIdentifier(tableName).replace(/'/g, "''");
+    
+    const result = await queryWithConfig<ForeignKeyInfo>(config, `
+      SELECT 
+        fk.name AS FK_NAME,
+        OBJECT_SCHEMA_NAME(fk.parent_object_id) AS FK_SCHEMA,
+        OBJECT_NAME(fk.parent_object_id) AS FK_TABLE,
+        COL_NAME(fkc.parent_object_id, fkc.parent_column_id) AS FK_COLUMN,
+        OBJECT_SCHEMA_NAME(fk.referenced_object_id) AS PK_SCHEMA,
+        OBJECT_NAME(fk.referenced_object_id) AS PK_TABLE,
+        COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id) AS PK_COLUMN
+      FROM sys.foreign_keys AS fk
+      INNER JOIN sys.foreign_key_columns AS fkc 
+        ON fk.object_id = fkc.constraint_object_id
+      WHERE OBJECT_SCHEMA_NAME(fk.referenced_object_id) = N'${escapedSchema}'
+        AND OBJECT_NAME(fk.referenced_object_id) = N'${escapedTable}'
+      ORDER BY fk.name, fkc.constraint_column_id
+    `);
+
+    const foreignKeys = result.recordset;
+
+    if (flowLog) {
+      flowLog.success(`Fetched ${foreignKeys.length} incoming foreign keys`);
+    } else {
+      logger.success(`Successfully fetched ${foreignKeys.length} incoming foreign keys for ${schemaName}.${tableName} with custom config`, {
+        server: config.server,
+        database: config.database,
+        schema: schemaName,
+        table: tableName,
+        foreignKeyCount: foreignKeys.length,
+      }, 'DB_FOREIGN_KEYS_INCOMING');
+    }
+
+    return foreignKeys;
+  } catch (error) {
+    if (flowLog) {
+      flowLog.error(`Error fetching incoming foreign keys`, error);
+    } else {
+      logger.error(`Error fetching incoming foreign keys for table: ${schemaName}.${tableName} with custom config`, {
+        error,
+        server: config.server,
+        database: config.database,
+        schema: schemaName,
+        table: tableName,
+      }, 'DB_FOREIGN_KEYS_INCOMING');
     }
     throw error;
   }
@@ -1132,6 +1890,447 @@ async function findDisplayColumn(
 }
 
 /**
+ * Get table data with referenced data from foreign key relationships using custom config
+ * This will join with related tables to show actual data instead of just IDs
+ */
+export async function getTableDataWithReferencesWithConfig(
+  config: DatabaseConfigItem,
+  schemaName: string,
+  tableName: string,
+  limit: number = DEFAULT_TABLE_LIMIT,
+  offset: number = DEFAULT_TABLE_PAGE,
+  flowId?: string
+): Promise<{
+  columns: string[];
+  rows: Record<string, unknown>[];
+  totalRows: number;
+  hasMore: boolean;
+  relationships: ForeignKeyInfo[];
+}> {
+  const flowLog = flowId ? logger.createFlowLogger(flowId) : null;
+  
+  try {
+    if (flowLog) {
+      flowLog.info(`Fetching foreign keys for table with custom config`);
+    } else {
+      logger.info(`Fetching data with references from table: ${schemaName}.${tableName} with custom config...`, {
+        server: config.server,
+        database: config.database,
+        schema: schemaName,
+        table: tableName,
+        limit,
+        offset,
+      }, 'DB_TABLE_DATA_WITH_REFS');
+    }
+
+    // Get foreign keys for this table using queryWithConfig
+    const escapedSchema = escapeSqlIdentifier(schemaName).replace(/'/g, "''");
+    const escapedTable = escapeSqlIdentifier(tableName).replace(/'/g, "''");
+    
+    const foreignKeysResult = await queryWithConfig<ForeignKeyInfo>(config, `
+      SELECT 
+        fk.name AS FK_NAME,
+        OBJECT_SCHEMA_NAME(fk.parent_object_id) AS FK_SCHEMA,
+        OBJECT_NAME(fk.parent_object_id) AS FK_TABLE,
+        COL_NAME(fkc.parent_object_id, fkc.parent_column_id) AS FK_COLUMN,
+        OBJECT_SCHEMA_NAME(fk.referenced_object_id) AS PK_SCHEMA,
+        OBJECT_NAME(fk.referenced_object_id) AS PK_TABLE,
+        COL_NAME(fkc.referenced_object_id, fkc.referenced_column_id) AS PK_COLUMN
+      FROM sys.foreign_keys AS fk
+      INNER JOIN sys.foreign_key_columns AS fkc 
+        ON fk.object_id = fkc.constraint_object_id
+      WHERE OBJECT_SCHEMA_NAME(fk.parent_object_id) = N'${escapedSchema}'
+        AND OBJECT_NAME(fk.parent_object_id) = N'${escapedTable}'
+      ORDER BY fk.name, fkc.constraint_column_id
+    `);
+
+    const foreignKeys = foreignKeysResult.recordset;
+
+    // If no foreign keys, just get regular data
+    if (foreignKeys.length === 0) {
+      if (flowLog) {
+        flowLog.info(`No foreign keys found, using regular data fetch`);
+      }
+      const regularData = await getTableDataWithConfig(config, schemaName, tableName, limit, offset, flowId);
+      return {
+        ...regularData,
+        relationships: [],
+      };
+    }
+
+    // Escape schema and table names for count query
+    const escapedCountSchema = escapeSqlIdentifier(schemaName);
+    const escapedCountTable = escapeSqlIdentifier(tableName);
+
+    // Get total row count using queryWithConfig
+    const countResult = await queryWithConfig<{ total: number }>(config, `
+      SELECT COUNT(*) as total
+      FROM [${escapedCountSchema}].[${escapedCountTable}]
+    `);
+    const totalRows = countResult.recordset[0]?.total || 0;
+
+    // First, get all columns from the table to maintain original order
+    const escapedSchemaForString = escapeSqlIdentifier(schemaName).replace(/'/g, "''");
+    const escapedTableForString = escapeSqlIdentifier(tableName).replace(/'/g, "''");
+    
+    const allColumnsResult = await queryWithConfig<{ COLUMN_NAME: string }>(config, `
+      SELECT COLUMN_NAME
+      FROM INFORMATION_SCHEMA.COLUMNS
+      WHERE TABLE_SCHEMA = N'${escapedSchemaForString}'
+        AND TABLE_NAME = N'${escapedTableForString}'
+      ORDER BY ORDINAL_POSITION
+    `);
+    
+    const allColumns = allColumnsResult.recordset.map(r => r.COLUMN_NAME);
+    const fkColumnNames = new Set(foreignKeys.map(fk => fk.FK_COLUMN));
+    
+    // Create a map of FK column to its join alias and display column
+    const fkMap = new Map<string, { alias: string; displayColumn: { expression: string; isFullName: boolean }; fk: ForeignKeyInfo }>();
+    
+    // Build SELECT clause - keep all columns in original order, replace FK values with referenced data
+    const selectColumns: string[] = [];
+    const joinClauses: string[] = [];
+    
+    // Escape schema and table names for main table (bracket notation, no string escaping needed)
+    const escapedMainSchema = escapeSqlIdentifier(schemaName);
+    const escapedMainTable = escapeSqlIdentifier(tableName);
+    
+    // Helper function to find display column with config
+    const findDisplayColumnWithConfig = async (
+      schemaName: string,
+      tableName: string,
+      excludeColumn: string,
+      fkColumnName?: string
+    ): Promise<{ expression: string; isFullName: boolean }> => {
+      try {
+        const fkLower = fkColumnName?.toLowerCase() || '';
+        const isPersonReference = fkColumnName && (
+          fkLower === 'oid' || fkLower.includes('oid') ||
+          fkLower === 'userid' || fkLower.includes('userid') ||
+          fkLower === 'nhanvienid' || fkLower.includes('nhanvienid') ||
+          fkLower === 'personid' || fkLower.includes('personid') ||
+          fkLower === 'nguoidungid' || fkLower.includes('nguoidungid') ||
+          fkLower === 'nhanvien' || fkLower.includes('nhanvien')
+        );
+
+        if (isPersonReference) {
+          return { expression: '', isFullName: true };
+        }
+
+        const displayPatterns = ['Name', 'Ten', 'Title', 'TieuDe', 'MoTa', 'Description', 'GhiChu', 'Code', 'Ma', 'MaSo'];
+        const escapedSchema = escapeSqlIdentifier(schemaName).replace(/'/g, "''");
+        const escapedTable = escapeSqlIdentifier(tableName).replace(/'/g, "''");
+        const escapedExcludeColumn = escapeSqlIdentifier(excludeColumn).replace(/'/g, "''");
+        
+        const columnsResult = await queryWithConfig<{ COLUMN_NAME: string }>(config, `
+          SELECT COLUMN_NAME
+          FROM INFORMATION_SCHEMA.COLUMNS
+          WHERE TABLE_SCHEMA = N'${escapedSchema}'
+            AND TABLE_NAME = N'${escapedTable}'
+            AND COLUMN_NAME != N'${escapedExcludeColumn}'
+          ORDER BY ORDINAL_POSITION
+        `);
+
+        const columns = columnsResult.recordset.map(r => r.COLUMN_NAME);
+
+        for (const pattern of displayPatterns) {
+          const found = columns.find(col => 
+            col === pattern || 
+            col.toLowerCase() === pattern.toLowerCase() ||
+            col.includes(pattern) ||
+            col.toLowerCase().includes(pattern.toLowerCase())
+          );
+          if (found) {
+            const escapedFound = found.replace(/]/g, ']]');
+            return { expression: `{alias}.[${escapedFound}]`, isFullName: false };
+          }
+        }
+
+        if (columns.length > 0) {
+          const escapedFirst = columns[0].replace(/]/g, ']]');
+          return { expression: `{alias}.[${escapedFirst}]`, isFullName: false };
+        }
+
+        return { expression: '', isFullName: false };
+      } catch (error) {
+        if (flowLog) {
+          flowLog.warn(`Error finding display column for ${schemaName}.${tableName}`, error);
+        }
+        return { expression: '', isFullName: false };
+      }
+    };
+
+    // Helper function to find full name expression with config
+    const findFullNameExpressionWithConfig = async (
+      schemaName: string,
+      tableName: string,
+      alias: string,
+      excludeColumn: string
+    ): Promise<string | null> => {
+      try {
+        const escapedSchema = escapeSqlIdentifier(schemaName).replace(/'/g, "''");
+        const escapedTable = escapeSqlIdentifier(tableName).replace(/'/g, "''");
+        const escapedExcludeColumn = escapeSqlIdentifier(excludeColumn).replace(/'/g, "''");
+        
+        const columnsResult = await queryWithConfig<{ COLUMN_NAME: string }>(config, `
+          SELECT COLUMN_NAME
+          FROM INFORMATION_SCHEMA.COLUMNS
+          WHERE TABLE_SCHEMA = N'${escapedSchema}'
+            AND TABLE_NAME = N'${escapedTable}'
+            AND COLUMN_NAME != N'${escapedExcludeColumn}'
+          ORDER BY ORDINAL_POSITION
+        `);
+
+        const columns = columnsResult.recordset.map(r => r.COLUMN_NAME);
+        const lowerColumns = columns.map(c => c.toLowerCase());
+
+        const hoPatterns = ['ho', 'họ', 'lastname', 'surname', 'familyname', 'holot', 'họ lót', 'holoten', 'họ và tên'];
+        const tenPatterns = ['ten', 'tên', 'firstname', 'givenname', 'forename', 'hoten', 'họ tên', 'holoten', 'họ và tên'];
+        
+        let hoColumn: string | null = null;
+        let tenColumn: string | null = null;
+
+        for (const pattern of hoPatterns) {
+          const patternLower = pattern.toLowerCase();
+          const exactMatch = columns.find((col, idx) => lowerColumns[idx] === patternLower);
+          if (exactMatch) {
+            hoColumn = exactMatch;
+            break;
+          }
+          const containsMatch = columns.find((col, idx) => 
+            lowerColumns[idx].includes(patternLower) && 
+            !lowerColumns[idx].includes('ten') && 
+            !lowerColumns[idx].includes('tên')
+          );
+          if (containsMatch) {
+            hoColumn = containsMatch;
+            break;
+          }
+        }
+
+        for (const pattern of tenPatterns) {
+          const patternLower = pattern.toLowerCase();
+          const exactMatch = columns.find((col, idx) => lowerColumns[idx] === patternLower);
+          if (exactMatch) {
+            tenColumn = exactMatch;
+            break;
+          }
+          const containsMatch = columns.find((col, idx) => 
+            lowerColumns[idx].includes(patternLower) && 
+            !lowerColumns[idx].includes('ho') && 
+            !lowerColumns[idx].includes('họ')
+          );
+          if (containsMatch) {
+            tenColumn = containsMatch;
+            break;
+          }
+        }
+        
+        const fullNameColumn = columns.find((col, idx) => {
+          const lower = lowerColumns[idx];
+          return lower === 'họ và tên' || lower === 'holoten' || lower === 'hoten' ||
+                 lower.includes('họ và tên') || lower.includes('holoten');
+        });
+        
+        if (fullNameColumn && !hoColumn && !tenColumn) {
+          const escapedFullName = fullNameColumn.replace(/]/g, ']]');
+          return `${alias}.[${escapedFullName}]`;
+        }
+
+        if (hoColumn && tenColumn) {
+          const escapedHo = hoColumn.replace(/]/g, ']]');
+          const escapedTen = tenColumn.replace(/]/g, ']]');
+          return `LTRIM(RTRIM(ISNULL(${alias}.[${escapedHo}], '') + ' ' + ISNULL(${alias}.[${escapedTen}], '')))`;
+        }
+
+        if (hoColumn) {
+          const escapedHo = hoColumn.replace(/]/g, ']]');
+          return `${alias}.[${escapedHo}]`;
+        }
+        
+        if (tenColumn) {
+          const escapedTen = tenColumn.replace(/]/g, ']]');
+          return `${alias}.[${escapedTen}]`;
+        }
+
+        return null;
+      } catch (error) {
+        if (flowLog) {
+          flowLog.warn(`Error finding full name columns for ${schemaName}.${tableName}`, error);
+        }
+        return null;
+      }
+    };
+    
+    // Process each foreign key to create joins first
+    for (let i = 0; i < foreignKeys.length; i++) {
+      const fk = foreignKeys[i];
+      
+      const alias = `ref_${fk.FK_COLUMN}_${i}`;
+      
+      const escapedFkColumn = fk.FK_COLUMN.replace(/]/g, ']]');
+      const escapedPkSchema = fk.PK_SCHEMA.replace(/]/g, ']]');
+      const escapedPkTable = fk.PK_TABLE.replace(/]/g, ']]');
+      const escapedPkColumn = fk.PK_COLUMN.replace(/]/g, ']]');
+      
+      joinClauses.push(`
+        LEFT JOIN [${escapedPkSchema}].[${escapedPkTable}] AS ${alias}
+          ON [${escapedMainSchema}].[${escapedMainTable}].[${escapedFkColumn}] = ${alias}.[${escapedPkColumn}]
+      `);
+      
+      const displayInfo = await findDisplayColumnWithConfig(
+        fk.PK_SCHEMA,
+        fk.PK_TABLE,
+        fk.PK_COLUMN,
+        fk.FK_COLUMN
+      );
+      
+      fkMap.set(fk.FK_COLUMN, { alias, displayColumn: displayInfo, fk });
+    }
+    
+    // Now build SELECT clause maintaining original column order
+    for (const column of allColumns) {
+      const escapedColumn = column.replace(/]/g, ']]');
+      
+      if (fkColumnNames.has(column)) {
+        const fkInfo = fkMap.get(column);
+        if (fkInfo) {
+          let displayValueExpr: string;
+          
+          if (fkInfo.displayColumn.isFullName) {
+            const fullNameExpr = await findFullNameExpressionWithConfig(
+              fkInfo.fk.PK_SCHEMA,
+              fkInfo.fk.PK_TABLE,
+              fkInfo.alias,
+              fkInfo.fk.PK_COLUMN
+            );
+            
+            if (fullNameExpr) {
+              displayValueExpr = fullNameExpr;
+            } else {
+              const refColumnsResult = await queryWithConfig<{ COLUMN_NAME: string }>(config, `
+                SELECT COLUMN_NAME
+                FROM INFORMATION_SCHEMA.COLUMNS
+                WHERE TABLE_SCHEMA = N'${fkInfo.fk.PK_SCHEMA.replace(/'/g, "''")}'
+                  AND TABLE_NAME = N'${fkInfo.fk.PK_TABLE.replace(/'/g, "''")}'
+                  AND COLUMN_NAME != N'${fkInfo.fk.PK_COLUMN.replace(/'/g, "''")}'
+                ORDER BY ORDINAL_POSITION
+              `);
+              
+              const refColumns = refColumnsResult.recordset.map(r => r.COLUMN_NAME);
+              const namePatterns = ['name', 'ten', 'tên', 'hoten', 'họ tên', 'holoten', 'họ và tên'];
+              
+              let nameColumn: string | null = null;
+              for (const pattern of namePatterns) {
+                const found = refColumns.find(col => 
+                  col.toLowerCase() === pattern || 
+                  col.toLowerCase().includes(pattern.toLowerCase())
+                );
+                if (found) {
+                  nameColumn = found;
+                  break;
+                }
+              }
+              
+              if (nameColumn) {
+                const escapedName = nameColumn.replace(/]/g, ']]');
+                displayValueExpr = `${fkInfo.alias}.[${escapedName}]`;
+              } else {
+                const firstCol = refColumns[0];
+                if (firstCol) {
+                  const escapedFirst = firstCol.replace(/]/g, ']]');
+                  displayValueExpr = `${fkInfo.alias}.[${escapedFirst}]`;
+                } else {
+                  displayValueExpr = `${fkInfo.alias}.[${fkInfo.fk.PK_COLUMN.replace(/]/g, ']]')}]`;
+                }
+              }
+            }
+          } else {
+            displayValueExpr = fkInfo.displayColumn.expression 
+              ? fkInfo.displayColumn.expression.replace('{alias}', fkInfo.alias)
+              : `${fkInfo.alias}.[${fkInfo.fk.PK_COLUMN.replace(/]/g, ']]')}]`;
+          }
+          
+          const originalIdColumn = `[${escapedMainSchema}].[${escapedMainTable}].[${escapedColumn}]`;
+          
+          const combinedExpr = `CASE 
+            WHEN ${displayValueExpr} IS NOT NULL AND LTRIM(RTRIM(CAST(${displayValueExpr} AS NVARCHAR(MAX)))) != '' 
+            THEN CAST(${displayValueExpr} AS NVARCHAR(MAX)) + CHAR(10) + '(ID: ' + CAST(${originalIdColumn} AS NVARCHAR(MAX)) + ')'
+            ELSE CAST(${originalIdColumn} AS NVARCHAR(MAX))
+          END`;
+          
+          selectColumns.push(`${combinedExpr} AS [${escapedColumn}]`);
+          
+          const originalIdColumnName = `${column}_OriginalId`;
+          const escapedOriginalIdColumnName = originalIdColumnName.replace(/]/g, ']]');
+          selectColumns.push(`${originalIdColumn} AS [${escapedOriginalIdColumnName}]`);
+        } else {
+          selectColumns.push(`[${escapedMainSchema}].[${escapedMainTable}].[${escapedColumn}]`);
+        }
+      } else {
+        selectColumns.push(`[${escapedMainSchema}].[${escapedMainTable}].[${escapedColumn}]`);
+      }
+    }
+    
+    const selectClause = selectColumns.join(', ');
+    const joinClause = joinClauses.join(' ');
+
+    if (flowLog) {
+      flowLog.debug(`Building query with ${foreignKeys.length} foreign key joins`);
+    }
+
+    const dataResult = await queryWithConfig(config, `
+      SELECT TOP ${limit} *
+      FROM (
+        SELECT ${selectClause}, ROW_NUMBER() OVER (ORDER BY (SELECT NULL)) as rn
+        FROM [${escapedMainSchema}].[${escapedMainTable}]
+        ${joinClause}
+      ) AS t
+      WHERE t.rn > ${offset}
+      ORDER BY t.rn
+    `);
+
+    const rows = Array.from(dataResult.recordset).map((row: unknown) => {
+      const rowObj = row as Record<string, unknown>;
+      // eslint-disable-next-line @typescript-eslint/no-unused-vars
+      const { rn: _rn, ...rest } = rowObj;
+      return rest;
+    });
+
+    const columns = rows.length > 0 
+      ? Object.keys(rows[0])
+      : [];
+
+    const hasMore = offset + rows.length < totalRows;
+
+    if (flowLog) {
+      flowLog.success(`Fetched ${rows.length} rows with references (${columns.length} columns, ${foreignKeys.length} relationships)`);
+    }
+
+    return {
+      columns,
+      rows,
+      totalRows,
+      hasMore,
+      relationships: foreignKeys,
+    };
+  } catch (error) {
+    if (flowLog) {
+      flowLog.error(`Error fetching table data with references`, error);
+    } else {
+      logger.error(`Error fetching data with references from table: ${schemaName}.${tableName} with custom config`, {
+        error,
+        server: config.server,
+        database: config.database,
+        schema: schemaName,
+        table: tableName,
+      }, 'DB_TABLE_DATA_WITH_REFS');
+    }
+    throw error;
+  }
+}
+
+/**
  * Get table data with referenced data from foreign key relationships
  * This will join with related tables to show actual data instead of just IDs
  */
@@ -1139,8 +2338,8 @@ export async function getTableDataWithReferences(
   databaseName: DatabaseName,
   schemaName: string,
   tableName: string,
-  limit: number = 100,
-  offset: number = 0,
+  limit: number = DEFAULT_TABLE_LIMIT,
+  offset: number = DEFAULT_TABLE_PAGE,
   flowId?: string
 ): Promise<{
   columns: string[];

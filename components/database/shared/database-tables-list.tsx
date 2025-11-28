@@ -1,17 +1,25 @@
 "use client";
 
 import { useMemo, useState, useCallback, useEffect } from "react";
-import { Table, Loader2, RefreshCw, Filter, XCircle, GitCompare, AlertCircle, CheckCircle2 } from "lucide-react";
+import { Table as TableIcon, Loader2, RefreshCw, Filter, XCircle, GitCompare, AlertCircle, CheckCircle2, ChevronLeft, ChevronRight, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Badge } from "@/components/ui/badge";
+import {
+  Table,
+  TableHeader,
+  TableBody,
+  TableHead,
+  TableRow,
+  TableCell,
+} from "@/components/ui/table";
 import type { DatabaseName } from "@/lib/db-config";
 import { getDatabaseConfig } from "@/lib/db-config";
+import { getMergedDatabaseConfig } from "@/lib/utils/db-config-storage";
 import { logger } from "@/lib/logger";
 import { TableDataView } from "../tables/table-data-view";
-import { useTestTable } from "@/lib/hooks/use-database-query";
+import { useTestTable, useTableStats } from "@/lib/hooks/use-database-query";
 import {
   Dialog,
   DialogContent,
@@ -19,17 +27,24 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
+import { cn } from "@/lib/utils";
+import { TABLE_LIST_LIMIT_OPTIONS, DEFAULT_TABLE_LIST_LIMIT, DEFAULT_TABLE_PAGE } from "@/lib/constants/table-constants";
+import { useDatabaseTables } from "@/lib/hooks/use-database-query";
+import { useDebounce } from "@/lib/hooks/use-debounce";
 
 interface TableInfo {
   TABLE_SCHEMA: string;
   TABLE_NAME: string;
   TABLE_TYPE: string;
+  rowCount?: number | null;
+  columnCount?: number | null;
+  relationshipCount?: number | null;
 }
 
 interface DatabaseTablesListProps {
   databaseName: DatabaseName;
-  tables?: TableInfo[];
-  isLoading: boolean;
+  tables?: TableInfo[]; // Deprecated: will use hook instead
+  isLoading?: boolean; // Deprecated: will use hook instead
   onRefresh: () => void;
   onCompareTable?: (table: { databaseName: DatabaseName; schema: string; table: string }) => void;
   selectedForComparison?: {
@@ -40,8 +55,8 @@ interface DatabaseTablesListProps {
 
 export function DatabaseTablesList({
   databaseName,
-  tables,
-  isLoading,
+  tables: propsTables, // Deprecated: use hook instead
+  isLoading: propsIsLoading, // Deprecated: use hook instead
   onRefresh,
   onCompareTable,
   selectedForComparison,
@@ -51,39 +66,72 @@ export function DatabaseTablesList({
     table: string;
   } | null>(null);
   const [filterText, setFilterText] = useState("");
+  // Pagination state
+  const [page, setPage] = useState(DEFAULT_TABLE_PAGE);
+  const [limit, setLimit] = useState(DEFAULT_TABLE_LIST_LIMIT);
+  
+  // Debounce filter text to avoid too many API calls while typing
+  const debouncedFilterText = useDebounce(filterText, 500);
+  
+  // Use hook to fetch tables with server-side filtering and pagination
+  // Use debounced filter text for API calls
+  const { data: tablesData, isLoading: tablesLoading } = useDatabaseTables(
+    databaseName,
+    true, // enabled
+    true, // includeStats
+    {
+      filterText: debouncedFilterText,
+      limit,
+      page,
+    }
+  );
+  
+  // Use data from hook if available, otherwise fall back to props (for backward compatibility)
+  const tables = useMemo((): TableInfo[] => {
+    return (tablesData?.data?.tables || propsTables || []) as TableInfo[];
+  }, [tablesData?.data?.tables, propsTables]);
+  
+  const isLoading = tablesLoading || propsIsLoading || false;
+  const totalCount = tablesData?.data?.totalCount || tables.length;
   // Track tables that have errors
   const [errorTables, setErrorTables] = useState<Set<string>>(new Set());
   // Track table status: 'idle' | 'testing' | 'success' | 'error'
   const [tableStatuses, setTableStatuses] = useState<Map<string, 'idle' | 'testing' | 'success' | 'error'>>(new Map());
   // Track which tables are being tested
   const [testingTables, setTestingTables] = useState<Set<string>>(new Set());
+  // Track table stats: row count, column count, relationship count
+  const [tableStats, setTableStats] = useState<Map<string, { rowCount: number; columnCount: number; relationshipCount: number }>>(new Map());
 
-  // Get database config to display actual database name
-  const dbConfig = useMemo(
-    () => getDatabaseConfig(databaseName),
-    [databaseName]
-  );
+      // Get database config to display actual database name
+      // Use merged config (user config || env config || defaults)
+      const dbConfig = useMemo(() => {
+        if (typeof window !== 'undefined') {
+          return getMergedDatabaseConfig(databaseName);
+        }
+        return getDatabaseConfig(databaseName);
+      }, [databaseName]);
 
-  // Filter tables based on filter text
-  const filteredTables = useMemo(() => {
-    if (!tables) return [];
-    if (!filterText.trim()) return tables;
-
-    const searchText = filterText.toLowerCase().trim();
-    const filtered = tables.filter(
-      (table) =>
-        table.TABLE_NAME.toLowerCase().includes(searchText) ||
-        table.TABLE_SCHEMA.toLowerCase().includes(searchText)
-    );
-    
-    
-    return filtered;
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [tables, filterText, databaseName]);
-
+  // Server-side filtering and pagination - tables are already filtered and paginated from API
+  const paginatedTables = tables; // Tables from API are already filtered and paginated
+  
   // Memoize table count
-  const tableCount = useMemo(() => tables?.length || 0, [tables]);
-  const filteredCount = useMemo(() => filteredTables.length, [filteredTables]);
+  const tableCount = useMemo(() => totalCount || tables.length, [totalCount, tables.length]);
+  const filteredCount = totalCount; // Total count after filtering (from API)
+  
+  // Pagination calculations
+  const totalPages = useMemo(() => Math.ceil(filteredCount / limit), [filteredCount, limit]);
+  const currentPage = useMemo(() => page + 1, [page]);
+  const offset = useMemo(() => page * limit, [page, limit]);
+  
+  // Reset page when debounced filter changes (not when filterText changes immediately)
+  useEffect(() => {
+    setPage(0);
+  }, [debouncedFilterText]);
+  
+  // Reset page when limit changes
+  useEffect(() => {
+    setPage(0);
+  }, [limit]);
 
   // Memoize display name
   const displayName = useMemo(() => {
@@ -100,8 +148,16 @@ export function DatabaseTablesList({
       schema,
       table,
     }, 'TABLE_LIST');
-    // Clear error state when user retries to view the table
+    
     const tableKey = `${schema}.${table}`;
+    const status = tableStatuses.get(tableKey) || 'idle';
+    
+    // Test table on click if not tested yet or has error
+    if (status === 'idle' || status === 'error') {
+      testTable(schema, table);
+    }
+    
+    // Clear error state when user retries to view the table
     if (errorTables.has(tableKey)) {
       setErrorTables((prev) => {
         const newSet = new Set(prev);
@@ -151,69 +207,161 @@ export function DatabaseTablesList({
   }, [testingTables]);
 
   // Component to test individual table using API route
+  // Only test when explicitly triggered (click), not on hover
   function TableTester({ schema, table }: { schema: string; table: string }) {
     const tableKey = `${schema}.${table}`;
     const isTesting = testingTables.has(tableKey);
+    const status = tableStatuses.get(tableKey) || 'idle';
+    
+    // Only enable test when explicitly testing (click) or retrying after error
+    const shouldTest = isTesting || (status === 'error');
     
     const { data, error, isLoading } = useTestTable(
       databaseName,
       schema,
       table,
-      isTesting // Only enable when testing
+      shouldTest // Only enable when explicitly testing
     );
 
     useEffect(() => {
-      if (!isTesting) return;
+      // Only process results when explicitly testing (click) or retrying after error
+      if (!shouldTest) return;
       
       if (error) {
         setTableStatuses((prev) => {
+          // Only update if status is not already 'error'
+          if (prev.get(tableKey) === 'error') return prev;
           const newMap = new Map(prev);
           newMap.set(tableKey, 'error');
           return newMap;
         });
-        setErrorTables((prev) => new Set(prev).add(tableKey));
+        setErrorTables((prev) => {
+          if (prev.has(tableKey)) return prev; // Already added
+          return new Set(prev).add(tableKey);
+        });
         setTestingTables((prev) => {
+          if (!prev.has(tableKey)) return prev; // Already removed
           const newSet = new Set(prev);
           newSet.delete(tableKey);
           return newSet;
         });
       } else if (data && !isLoading) {
-        if (data.success && data.data.accessible) {
-          setTableStatuses((prev) => {
-            const newMap = new Map(prev);
-            newMap.set(tableKey, 'success');
-            return newMap;
-          });
+        const isAccessible = data.success && data.data.accessible;
+        const newStatus = isAccessible ? 'success' : 'error';
+        
+        setTableStatuses((prev) => {
+          // Only update if status actually changed
+          if (prev.get(tableKey) === newStatus) return prev;
+          const newMap = new Map(prev);
+          newMap.set(tableKey, newStatus);
+          return newMap;
+        });
+        
+        if (isAccessible) {
           // Clear error if table is now working
           setErrorTables((prev) => {
-            if (prev.has(tableKey)) {
-              const newSet = new Set(prev);
-              newSet.delete(tableKey);
-              return newSet;
-            }
-            return prev;
+            if (!prev.has(tableKey)) return prev; // Already cleared
+            const newSet = new Set(prev);
+            newSet.delete(tableKey);
+            return newSet;
           });
         } else {
-          setTableStatuses((prev) => {
-            const newMap = new Map(prev);
-            newMap.set(tableKey, 'error');
-            return newMap;
+          setErrorTables((prev) => {
+            if (prev.has(tableKey)) return prev; // Already added
+            return new Set(prev).add(tableKey);
           });
-          setErrorTables((prev) => new Set(prev).add(tableKey));
         }
+        
         setTestingTables((prev) => {
+          if (!prev.has(tableKey)) return prev; // Already removed
           const newSet = new Set(prev);
           newSet.delete(tableKey);
           return newSet;
         });
       }
-    }, [data, error, isLoading, isTesting, tableKey]);
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [data?.success, data?.data?.accessible, error, isLoading, shouldTest, tableKey]);
+
+    return null; // This component doesn't render anything
+  }
+
+  // Component to fetch table stats (rows, columns, relationships)
+  // Only fetch if stats are not already available from API response
+  function TableStats({ schema, table }: { schema: string; table: string }) {
+    const tableKey = `${schema}.${table}`;
+    const status = tableStatuses.get(tableKey) || 'idle';
+    
+    // Check if stats are already available from API response
+    // Stats must be defined and not null (null means stats fetch failed)
+    const tableFromList = tables?.find(
+      (t) => t.TABLE_SCHEMA === schema && t.TABLE_NAME === table
+    );
+    const hasStatsFromApi = tableFromList && 
+      tableFromList.rowCount !== undefined && 
+      tableFromList.rowCount !== null &&
+      tableFromList.columnCount !== undefined && 
+      tableFromList.columnCount !== null &&
+      tableFromList.relationshipCount !== undefined &&
+      tableFromList.relationshipCount !== null;
+    
+    // Only fetch stats when table is successfully tested AND stats are not already available
+    const shouldFetchStats = status === 'success' && !hasStatsFromApi;
+    
+    const { data: statsData, error } = useTableStats(
+      databaseName,
+      schema,
+      table,
+      shouldFetchStats
+    );
+
+    useEffect(() => {
+      if (shouldFetchStats) {
+        if (statsData?.success && statsData.data) {
+          const newStats = {
+            rowCount: statsData.data.rowCount,
+            columnCount: statsData.data.columnCount,
+            relationshipCount: statsData.data.relationshipCount,
+          };
+          
+          setTableStats((prev) => {
+            // Only update if stats actually changed
+            const existing = prev.get(tableKey);
+            if (existing && 
+                existing.rowCount === newStats.rowCount &&
+                existing.columnCount === newStats.columnCount &&
+                existing.relationshipCount === newStats.relationshipCount) {
+              return prev; // No change, return same reference
+            }
+            
+            logger.info('Table stats fetched successfully', {
+              database: databaseName,
+              schema,
+              table,
+              stats: newStats,
+            }, 'TABLE_LIST');
+            
+            const newMap = new Map(prev);
+            newMap.set(tableKey, newStats);
+            return newMap;
+          });
+        } else if (error) {
+          // Log error but don't block UI
+          logger.warn('Failed to fetch table stats', {
+            database: databaseName,
+            schema,
+            table,
+            error,
+          }, 'TABLE_LIST');
+        }
+      }
+      // eslint-disable-next-line react-hooks/exhaustive-deps
+    }, [shouldFetchStats, statsData?.success, statsData?.data?.rowCount, statsData?.data?.columnCount, statsData?.data?.relationshipCount, tableKey, error, hasStatsFromApi]);
 
     return null; // This component doesn't render anything
   }
 
   // Test all tables
-  const testAllTables = useCallback(() => {
+  const testAllTables = useCallback(() => { 
     if (!tables) return;
     tables.forEach((table) => {
       testTable(table.TABLE_SCHEMA, table.TABLE_NAME);
@@ -225,7 +373,7 @@ export function DatabaseTablesList({
       <Separator className="mb-4" />
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
-          <Table className="h-4 w-4 text-muted-foreground" />
+          <TableIcon className="h-4 w-4 text-muted-foreground" />
           <h3 className="text-sm font-semibold text-foreground">
             Tables in {displayName}
           </h3>
@@ -235,7 +383,7 @@ export function DatabaseTablesList({
             </span>
           )}
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex items-center bg-white p-2 rounded-md gap-2">
           {tables && !isLoading && (
             <>
               <Button
@@ -275,7 +423,7 @@ export function DatabaseTablesList({
           </span>
         </div>
       ) : tables && tables.length > 0 ? (
-        <div className="space-y-2">
+        <div className="space-y-2 bg-white p-2 rounded-md">
           {/* Filter Input */}
           <div className="relative">
             <div className="relative bg-white">
@@ -304,10 +452,21 @@ export function DatabaseTablesList({
             </div>
           </div>
 
-          <ScrollArea className="max-h-64 overflow-y-auto">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 pr-4">
-              {filteredTables.length > 0 ? (
-                filteredTables.map((table) => {
+          <Table containerClassName="max-h-[calc(100vh-300px)] min-h-[400px] bg-white overflow-y-auto">
+            <TableHeader>
+              <TableRow>
+                <TableHead className="w-[200px] min-w-[200px] max-w-[200px] sticky left-0 z-20 bg-background border-r whitespace-normal break-words">Table Name</TableHead>
+                <TableHead className="w-[120px] min-w-[120px] max-w-[120px]">Schema</TableHead>
+                <TableHead className="w-[80px] min-w-[80px] max-w-[80px]">Status</TableHead>
+                <TableHead className="w-[100px] min-w-[100px] max-w-[100px] text-right">Rows</TableHead>
+                <TableHead className="w-[80px] min-w-[80px] max-w-[80px] text-right">Columns</TableHead>
+                <TableHead className="w-[100px] min-w-[100px] max-w-[100px] text-right">Relationships</TableHead>
+                <TableHead className="w-[80px] min-w-[80px] max-w-[80px] sticky text-center right-0 z-20 bg-white border-l">Actions</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {paginatedTables.length > 0 ? (
+                paginatedTables.map((table) => {
                   const isSelectedLeft =
                     selectedForComparison?.left?.databaseName === databaseName &&
                     selectedForComparison?.left?.schema === table.TABLE_SCHEMA &&
@@ -322,123 +481,251 @@ export function DatabaseTablesList({
                   const status = tableStatuses.get(tableKey) || 'idle';
                   const isTesting = status === 'testing';
                   const isSuccess = status === 'success';
+                  // Use stats from API response if available, otherwise use fetched stats
+                  // Check if stats are available and not null (null means stats fetch failed)
+                  const hasStatsFromApi = table.rowCount !== undefined && 
+                                         table.rowCount !== null &&
+                                         table.columnCount !== undefined && 
+                                         table.columnCount !== null &&
+                                         table.relationshipCount !== undefined &&
+                                         table.relationshipCount !== null;
+                  const statsFromApi = hasStatsFromApi
+                    ? { rowCount: table.rowCount!, columnCount: table.columnCount!, relationshipCount: table.relationshipCount! }
+                    : null;
+                  const stats = statsFromApi || tableStats.get(tableKey);
+                  const hasStats = stats && 
+                                   stats.rowCount !== null && 
+                                   stats.rowCount !== undefined &&
+                                   stats.columnCount !== null && 
+                                   stats.columnCount !== undefined &&
+                                   stats.relationshipCount !== null && 
+                                   stats.relationshipCount !== undefined;
 
                   return (
-                    <div
+                    <TableRow
                       key={tableKey}
-                      className={`flex items-center gap-2 p-2 rounded-md border transition-colors group ${
+                      className={`cursor-pointer transition-colors ${
                         hasError
-                          ? "bg-red-50 dark:bg-red-950/20 border-red-300 dark:border-red-800 hover:bg-red-100 dark:hover:bg-red-950/30"
+                          ? "bg-red-50 dark:bg-red-950/20 hover:bg-red-100 dark:hover:bg-red-950/30"
                           : isSelectedLeft
-                            ? "bg-blue-500/10 border-blue-500/50 hover:bg-blue-500/20"
+                            ? "bg-blue-500/10 hover:bg-blue-500/20"
                             : isSelectedRight
-                              ? "bg-green-500/10 border-green-500/50 hover:bg-green-500/20"
-                              : "bg-background border-border hover:bg-accent hover:border-primary/50"
+                              ? "bg-green-500/10 hover:bg-green-500/20"
+                              : "hover:bg-accent"
                       }`}
-                    >
-                    <div
                       onClick={() => {
                         handleTableClick(table.TABLE_SCHEMA, table.TABLE_NAME);
                       }}
-                      onMouseEnter={() => {
-                        // Auto-test table on hover if not tested yet
-                        if (status === 'idle' && !isTesting) {
-                          testTable(table.TABLE_SCHEMA, table.TABLE_NAME);
-                        }
-                      }}
-                      className="flex items-center gap-2 flex-1 min-w-0 cursor-pointer"
-                      title={
-                        hasError
-                          ? `Error loading data from ${table.TABLE_SCHEMA}.${table.TABLE_NAME}. Click to retry.`
-                          : isTesting
-                            ? `Testing ${table.TABLE_SCHEMA}.${table.TABLE_NAME}...`
-                            : isSuccess
-                              ? `${table.TABLE_SCHEMA}.${table.TABLE_NAME} is working. Click to view.`
-                              : `Click to test and view data: ${table.TABLE_SCHEMA}.${table.TABLE_NAME} in ${databaseName}`
-                      }
                     >
-                      <div className="flex-1 min-w-0">
-                        <div className="flex items-center gap-2">
-                          {isTesting && (
-                            <Loader2 className="h-3 w-3 text-blue-500 animate-spin flex-shrink-0" />
-                          )}
-                          {hasError && !isTesting && (
-                            <AlertCircle className="h-3 w-3 text-red-500 flex-shrink-0" />
-                          )}
-                          {isSuccess && !hasError && !isTesting && (
-                            <CheckCircle2 className="h-3 w-3 text-green-500 flex-shrink-0" />
-                          )}
-                          <p className={`text-xs font-medium truncate ${
-                            hasError 
-                              ? "text-red-700 dark:text-red-300" 
-                              : "text-foreground"
-                          }`}>
-                            {table.TABLE_NAME}
-                          </p>
-                          {isSelected && (
-                            <Badge
-                              variant="outline"
-                              className={`text-xs font-semibold px-1.5 py-0.5 ${
-                                isSelectedLeft
-                                  ? "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20"
-                                  : "bg-green-500/10 text-green-700 dark:text-green-300 border-green-500/20"
-                              }`}
+                      <TableCell className={cn("sticky left-0 z-20 bg-white border-r font-medium w-[200px] min-w-[200px] max-w-[200px] whitespace-normal break-words", hasError ? "text-red-600 dark:text-red-400" : "text-muted-foreground")}>
+                        <div className="flex items-start gap-2">
+                          <div className="flex-shrink-0 flex items-center gap-1 mt-0.5">
+                            {isTesting && (
+                              <Loader2 className="h-3 w-3 text-blue-500 animate-spin" />
+                            )}
+                            {hasError && !isTesting && (
+                              <AlertCircle className="h-3 w-3 text-red-500" />
+                            )}
+                            {isSuccess && !hasError && !isTesting && (
+                              <CheckCircle2 className="h-3 w-3 text-green-500" />
+                            )}
+                          </div>
+                          <div className="flex-1 min-w-0">
+                            <span className={hasError ? "text-red-700 dark:text-red-300" : ""}>
+                              {table.TABLE_NAME}
+                            </span>
+                            {isSelected && (
+                              <Badge
+                                variant="outline"
+                                className={`text-xs font-semibold px-1.5 py-0.5 mt-1 block ${
+                                  isSelectedLeft
+                                    ? "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20"
+                                    : "bg-green-500/10 text-green-700 dark:text-green-300 border-green-500/20"
+                                }`}
+                              >
+                                {isSelectedLeft ? "1st" : "2nd"}
+                              </Badge>
+                            )}
+                          </div>
+                        </div>
+                      </TableCell>
+                      <TableCell className={cn("w-[120px] min-w-[120px] max-w-[120px]", hasError ? "text-red-600 dark:text-red-400" : "text-muted-foreground")}>
+                        {table.TABLE_SCHEMA}
+                      </TableCell>
+                      <TableCell className={cn("w-[80px] min-w-[80px] max-w-[80px]", isTesting ? "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20" : hasError ? "bg-red-500/10 text-red-700 dark:text-red-300 border-red-500/20" : isSuccess ? "bg-green-500/10 text-green-700 dark:text-green-300 border-green-500/20" : "")}>
+                        {isTesting ? (
+                          <Badge variant="outline" className="text-xs">
+                            Testing
+                          </Badge>
+                        ) : hasError ? (
+                          <Badge variant="destructive" className="text-xs">
+                            Error
+                          </Badge>
+                        ) : isSuccess ? (
+                          <Badge variant="default" className="text-xs bg-green-500">
+                            Success
+                          </Badge>
+                        ) : (
+                          <Badge variant="outline" className="text-xs">
+                            Idle
+                          </Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className={cn("w-[100px] min-w-[100px] max-w-[100px]", "text-right text-muted-foreground")}>
+                        {hasStats 
+                          ? stats!.rowCount.toLocaleString() 
+                          : '-'}
+                      </TableCell>
+                      <TableCell className={cn("w-[80px] min-w-[80px] max-w-[80px]", "text-right text-muted-foreground")}>
+                        {hasStats 
+                          ? stats!.columnCount 
+                          : '-'}
+                      </TableCell>
+                      <TableCell className={cn("w-[100px] min-w-[100px] max-w-[100px]", "text-right text-muted-foreground")}>
+                        {hasStats 
+                          ? stats!.relationshipCount 
+                          : '-'}
+                      </TableCell>
+                      <TableCell className={`w-[80px] min-w-[80px] max-w-[80px] sticky text-center justify-center items-center right-0 z-10 bg-white border-l ${
+                        hasError
+                          ? "bg-red-50 dark:bg-red-950/20"
+                          : isSelectedLeft
+                            ? "bg-blue-500/10"
+                            : isSelectedRight
+                              ? "bg-green-500/10"
+                              : ""
+                      }`}>
+                        <div className="flex items-center gap-1 justify-center items-center">
+                          {onCompareTable && (
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                logger.info('Table selected for comparison', {
+                                  database: databaseName,
+                                  schema: table.TABLE_SCHEMA,
+                                  table: table.TABLE_NAME,
+                                }, 'TABLE_LIST');
+                                onCompareTable({
+                                  databaseName,
+                                  schema: table.TABLE_SCHEMA,
+                                  table: table.TABLE_NAME,
+                                });
+                              }}
+                              className="h-6 w-6"
+                              title="Compare this table with another"
                             >
-                              {isSelectedLeft ? "1st" : "2nd"}
-                            </Badge>
+                              <GitCompare className="h-3 w-3" />
+                            </Button>
                           )}
                         </div>
-                        <p className={`text-xs truncate ${
-                          hasError 
-                            ? "text-red-600 dark:text-red-400" 
-                            : "text-muted-foreground"
-                        }`}>
-                          Schema: {table.TABLE_SCHEMA}
-                        </p>
-                      </div>
-                    </div>
-                    {/* Hidden component to test table */}
-                    <TableTester schema={table.TABLE_SCHEMA} table={table.TABLE_NAME} />
-                    {onCompareTable && (
-                      <Button
-                        variant="ghost"
-                        size="icon-sm"
-                        onClick={(e) => {
-                          e.stopPropagation();
-                          logger.info('Table selected for comparison', {
-                            database: databaseName,
-                            schema: table.TABLE_SCHEMA,
-                            table: table.TABLE_NAME,
-                          }, 'TABLE_LIST');
-                          onCompareTable({
-                            databaseName,
-                            schema: table.TABLE_SCHEMA,
-                            table: table.TABLE_NAME,
-                          });
-                        }}
-                        className={`h-6 w-6 transition-opacity ${
-                          isSelected
-                            ? "opacity-100"
-                            : "opacity-0 group-hover:opacity-100"
-                        }`}
-                        title="Compare this table with another"
-                      >
-                        <GitCompare className="h-3 w-3" />
-                      </Button>
-                    )}
-                  </div>
-                );
+                        {/* Hidden components to test table and fetch stats */}
+                        <TableTester schema={table.TABLE_SCHEMA} table={table.TABLE_NAME} />
+                        <TableStats schema={table.TABLE_SCHEMA} table={table.TABLE_NAME} />
+                      </TableCell>
+                    </TableRow>
+                  );
                 })
               ) : (
-                <div className="col-span-2 text-center py-4">
-                  <Table className="h-6 w-6 text-muted-foreground mx-auto mb-2 opacity-50" />
-                  <p className="text-xs text-muted-foreground">
-                    No tables match &quot;{filterText}&quot;
-                  </p>
-                </div>
+                <TableRow>
+                  <TableCell colSpan={7} className="text-center py-4">
+                    <TableIcon className="h-6 w-6 text-muted-foreground mx-auto mb-2 opacity-50" />
+                    <p className="text-xs text-muted-foreground">
+                      No tables match &quot;{filterText}&quot;
+                    </p>
+                  </TableCell>
+                </TableRow>
               )}
+            </TableBody>
+          </Table>
+          <Separator />
+          {/* Pagination Controls */}
+          {filteredCount > 0 && (
+            <div className="flex items-center justify-between px-4 py-2 bg-muted/30">
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">Rows per page:</span>
+                <select
+                  value={limit}
+                  onChange={(e) => {
+                    const newLimit = parseInt(e.target.value, 10);
+                    setLimit(newLimit);
+                  }}
+                  className="h-7 px-2 text-xs border rounded bg-background"
+                >
+                  {TABLE_LIST_LIMIT_OPTIONS.map((option) => (
+                    <option key={option} value={option}>
+                      {option}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs text-muted-foreground">
+                  {offset + 1}-{Math.min(offset + limit, filteredCount)} of {filteredCount}
+                </span>
+                <div className="flex items-center gap-1">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage(0)}
+                    disabled={page === 0}
+                    className="h-7 w-7 p-0"
+                    title="First page"
+                  >
+                    <ChevronsLeft className="h-3 w-3" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage(page - 1)}
+                    disabled={page === 0}
+                    className="h-7 w-7 p-0"
+                    title="Previous page"
+                  >
+                    <ChevronLeft className="h-3 w-3" />
+                  </Button>
+                  <div className="flex items-center gap-1 px-2">
+                    <span className="text-xs text-muted-foreground">Page</span>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={totalPages || 1}
+                      value={currentPage}
+                      onChange={(e) => {
+                        const pageNum = parseInt(e.target.value, 10);
+                        if (!isNaN(pageNum) && pageNum >= 1 && pageNum <= totalPages) {
+                          setPage(pageNum - 1);
+                        }
+                      }}
+                      className="h-7 w-12 text-center text-xs"
+                    />
+                    <span className="text-xs text-muted-foreground">of {totalPages || 1}</span>
+                  </div>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage(page + 1)}
+                    disabled={page >= totalPages - 1}
+                    className="h-7 w-7 p-0"
+                    title="Next page"
+                  >
+                    <ChevronRight className="h-3 w-3" />
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => setPage(totalPages - 1)}
+                    disabled={page >= totalPages - 1}
+                    className="h-7 w-7 p-0"
+                    title="Last page"
+                  >
+                    <ChevronsRight className="h-3 w-3" />
+                  </Button>
+                </div>
+              </div>
             </div>
-          </ScrollArea>
+          )}
           <Separator />
           <p className="text-xs text-muted-foreground text-center pt-2">
             {filterText ? (
@@ -459,7 +746,7 @@ export function DatabaseTablesList({
         </div>
       ) : tables && tables.length === 0 ? (
         <div className="text-center py-4">
-          <Table className="h-8 w-8 text-muted-foreground mx-auto mb-2 opacity-50" />
+          <TableIcon className="h-8 w-8 text-muted-foreground mx-auto mb-2 opacity-50" />
           <p className="text-xs text-muted-foreground">
             No tables found in {displayName} database
           </p>

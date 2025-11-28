@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { getDatabaseConfigSystem, getDatabaseConfig, validateDatabaseConfig, getConfigSummary } from '@/lib/db-config';
 import { logger } from '@/lib/logger';
 import type { DatabaseName } from '@/lib/db-config';
+import { HTTP_STATUS_INTERNAL_SERVER_ERROR } from '@/lib/constants/db-constants';
 
 export async function GET(request: Request) {
   try {
@@ -62,7 +63,7 @@ export async function GET(request: Request) {
         message: 'Error fetching configuration',
         error: errorMessage,
       },
-      { status: 500 }
+      { status: HTTP_STATUS_INTERNAL_SERVER_ERROR }
     );
   }
 }

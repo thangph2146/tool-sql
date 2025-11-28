@@ -1,18 +1,21 @@
 'use client';
 
-import { useMemo } from 'react';
-import { Database, CheckCircle2, XCircle, Loader2, RefreshCw } from 'lucide-react';
+import { useMemo, useState } from 'react';
+import { Database, CheckCircle2, XCircle, Loader2, RefreshCw, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
 import type { DatabaseName } from '@/lib/db-config';
 import { getDatabaseConfig } from '@/lib/db-config';
-import { useDatabaseConnection, useDatabaseTables, useTestConnection, useFetchTables } from '@/lib/hooks/use-database-query';
+import { getMergedDatabaseConfig } from '@/lib/utils/db-config-storage';
+import { useDatabaseConnection, useTestConnection, useFetchTables } from '@/lib/hooks/use-database-query';
 import { DatabaseServerInfo } from './database-server-info';
 import { DatabaseTablesList } from '../shared';
 import { DatabaseErrorDisplay } from './database-error-display';
+import { DatabaseConfigDialog } from './database-config-dialog';
 
 interface DatabaseCardProps {
   databaseName: DatabaseName;
+  enabled?: boolean;
   selectedForComparison?: {
     left: { databaseName: DatabaseName; schema: string; table: string } | null;
     right: { databaseName: DatabaseName; schema: string; table: string } | null;
@@ -21,15 +24,22 @@ interface DatabaseCardProps {
 
 export function DatabaseCard({
   databaseName,
+  enabled = true,
   selectedForComparison,
 }: DatabaseCardProps) {
+  const [configDialogOpen, setConfigDialogOpen] = useState(false);
+  
   // Get database config to display actual database name
-  const dbConfig = useMemo(() => getDatabaseConfig(databaseName), [databaseName]);
+  // Use merged config (user config + env config) on client side
+  const dbConfig = useMemo(() => {
+    if (typeof window !== 'undefined') {
+      return getMergedDatabaseConfig(databaseName);
+    }
+    return getDatabaseConfig(databaseName);
+  }, [databaseName]);
   
   const { data: connectionData, isLoading: connectionLoading, isError: connectionError } = 
-    useDatabaseConnection(databaseName);
-  const { data: tablesData, isLoading: tablesLoading } = 
-    useDatabaseTables(databaseName);
+    useDatabaseConnection(databaseName, enabled);
   
   const testConnectionMutation = useTestConnection();
   const fetchTablesMutation = useFetchTables();
@@ -95,19 +105,8 @@ export function DatabaseCard({
     }
   }, [status]);
 
-  // Memoize tables
-  const tables = useMemo(() => {
-    if (tablesData?.success) {
-      if (tablesData.data.database) {
-        // Single database response
-        return tablesData.data.tables || [];
-      } else {
-        // All databases response
-        return tablesData.data[databaseName]?.tables || [];
-      }
-    }
-    return undefined;
-  }, [tablesData, databaseName]);
+  // DatabaseTablesList component manages its own data fetching via useDatabaseTables hook
+  // No need to fetch tables here to avoid duplicate API calls
 
   const handleTestConnection = () => {
     testConnectionMutation.mutate(databaseName);
@@ -118,7 +117,6 @@ export function DatabaseCard({
   };
 
   const isLoading = connectionLoading || testConnectionMutation.isPending;
-  const isTablesLoading = tablesLoading || fetchTablesMutation.isPending;
 
   return (
     <div
@@ -139,24 +137,35 @@ export function DatabaseCard({
             </p>
           </div>
         </div>
-        <Button
-          onClick={handleTestConnection}
-          disabled={isLoading}
-          variant="default"
-          size="default"
-        >
-          {isLoading ? (
-            <>
-              <Loader2 className="animate-spin" />
-              <span className="hidden sm:inline">Testing...</span>
-            </>
-          ) : (
-            <>
-              <RefreshCw />
-              <span className="hidden sm:inline">Test Again</span>
-            </>
-          )}
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button
+            onClick={() => setConfigDialogOpen(true)}
+            variant="outline"
+            size="default"
+            title="Cấu hình database"
+          >
+            <Settings className="h-4 w-4" />
+            <span className="hidden sm:inline">Cấu hình</span>
+          </Button>
+          <Button
+            onClick={handleTestConnection}
+            disabled={isLoading}
+            variant="default"
+            size="default"
+          >
+            {isLoading ? (
+              <>
+                <Loader2 className="animate-spin" />
+                <span className="hidden sm:inline">Testing...</span>
+              </>
+            ) : (
+              <>
+                <RefreshCw />
+                <span className="hidden sm:inline">Test Again</span>
+              </>
+            )}
+          </Button>
+        </div>
       </div>
 
       {connectionData?.data && (
@@ -175,8 +184,6 @@ export function DatabaseCard({
       {status === 'connected' && (
         <DatabaseTablesList
           databaseName={databaseName}
-          tables={tables}
-          isLoading={isTablesLoading}
           onRefresh={handleFetchTables}
           onCompareTable={(table) => {
             // This will be handled by parent component
@@ -200,6 +207,16 @@ export function DatabaseCard({
           }
         />
       )}
+
+      {/* Config Dialog */}
+      <DatabaseConfigDialog
+        databaseName={databaseName}
+        open={configDialogOpen}
+        onOpenChange={setConfigDialogOpen}
+        onConfigSaved={() => {
+          // Config will trigger page reload, so no need to do anything here
+        }}
+      />
     </div>
   );
 }

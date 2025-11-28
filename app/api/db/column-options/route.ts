@@ -1,10 +1,12 @@
 import { NextRequest, NextResponse } from "next/server";
 import type { DatabaseName } from "@/lib/db-config";
 import {
-  getTableData,
-  getTableDataWithReferences,
+  getTableDataWithConfig,
+  getTableDataWithReferencesWithConfig,
 } from "@/lib/db-manager";
 import { logger } from "@/lib/logger";
+import { getMergedConfigFromParams } from "@/lib/utils/api-config-helper";
+import { DEFAULT_COLUMN_OPTIONS_LIMIT, MAX_COLUMN_OPTIONS_LIMIT, MIN_COLUMN_OPTIONS_LIMIT, HTTP_STATUS_BAD_REQUEST, HTTP_STATUS_INTERNAL_SERVER_ERROR } from "@/lib/constants/db-constants";
 import {
   collectColumnUniqueValues,
   FilterRelationships,
@@ -19,8 +21,8 @@ export async function GET(request: NextRequest) {
   const includeReferences = searchParams.get("includeReferences") === "true";
   const search = searchParams.get("search") || "";
   const limit = Math.min(
-    Math.max(parseInt(searchParams.get("limit") || "500", 10), 1),
-    2000
+    Math.max(parseInt(searchParams.get("limit") || String(DEFAULT_COLUMN_OPTIONS_LIMIT), 10), MIN_COLUMN_OPTIONS_LIMIT),
+    MAX_COLUMN_OPTIONS_LIMIT
   );
 
   if (!databaseName || !schemaName || !tableName || !columnName) {
@@ -30,7 +32,7 @@ export async function GET(request: NextRequest) {
         message:
           "Missing required parameters: database, schema, table, and column are required",
       },
-      { status: 400 }
+      { status: HTTP_STATUS_BAD_REQUEST }
     );
   }
 
@@ -48,18 +50,42 @@ export async function GET(request: NextRequest) {
 
   try {
     flowLog.info("Fetching column option data");
+    
+    // Get merged config: customConfig || envConfig || defaults
+    const customConfigParam = searchParams.get("config");
+    flowLog.info(`Getting database configuration`, { 
+      database: databaseName,
+      hasCustomConfig: !!customConfigParam 
+    });
+    const dbConfig = getMergedConfigFromParams(databaseName, customConfigParam, flowLog);
+    
+    if (!dbConfig.enabled) {
+      flowLog.error(`Database ${databaseName} is disabled`);
+      flowLog.end(false, { reason: 'Database disabled' });
+      return NextResponse.json(
+        {
+          success: false,
+          message: `Database ${databaseName} is disabled`,
+          error: 'Database disabled',
+        },
+        { status: HTTP_STATUS_BAD_REQUEST }
+      );
+    }
 
+    flowLog.success(`Database ${databaseName} is enabled`);
+
+    // Always use *WithConfig functions for consistency: customConfig || envConfig || defaults
     const tableData = includeReferences
-      ? await getTableDataWithReferences(
-          databaseName,
+      ? await getTableDataWithReferencesWithConfig(
+          dbConfig,
           schemaName,
           tableName,
           limit,
           0,
           flowId
         )
-      : await getTableData(
-          databaseName,
+      : await getTableDataWithConfig(
+          dbConfig,
           schemaName,
           tableName,
           limit,
@@ -116,7 +142,7 @@ export async function GET(request: NextRequest) {
         message: "Failed to fetch column options",
         error: error instanceof Error ? error.message : "Unknown error",
       },
-      { status: 500 }
+      { status: HTTP_STATUS_INTERNAL_SERVER_ERROR }
     );
   }
 }

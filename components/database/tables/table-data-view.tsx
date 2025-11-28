@@ -79,18 +79,13 @@ export function TableDataView({
     }
   }, [flowLog, databaseName, schemaName, tableName]);
 
-  // Fetch relationships
+  // Fetch relationships (fallback if not included in table data)
   const { data: relationshipsData } = useTableRelationships(
     databaseName,
     schemaName,
     tableName,
     true
   );
-
-  const relationships = useMemo(() => {
-    const rels = relationshipsData?.data?.relationships || [];
-    return sortRelationships(rels);
-  }, [relationshipsData?.data?.relationships]);
 
   // Fetch initial data to get totalRows (minimal fetch)
   const { data: initialData } = useTableData(
@@ -105,15 +100,6 @@ export function TableDataView({
 
   const totalRows = initialData?.data?.totalRows || 0;
 
-  // Use pagination hook
-  const pagination = useTablePagination({
-    totalRows,
-    limit,
-    onLimitChange: useCallback((newLimit: number) => {
-      setLimit(newLimit);
-    }, []),
-  });
-
   // Filter state (used to drive API filters)
   const {
     filters,
@@ -126,6 +112,15 @@ export function TableDataView({
     handleClearFilters: baseHandleClearFilters,
     handleClearFilter: baseHandleClearFilter,
   } = useTableFilters();
+
+  // Use pagination hook
+  const pagination = useTablePagination({
+    totalRows,
+    limit,
+    onLimitChange: useCallback((newLimit: number) => {
+      setLimit(newLimit);
+    }, []),
+  });
 
   // Fetch data with pagination (server-side filters)
   const { data, isLoading, error } = useTableData(
@@ -140,6 +135,17 @@ export function TableDataView({
   );
 
   const tableData = data?.data;
+  
+  // Merge relationships: prefer from tableData (when includeReferences=true), fallback to relationshipsData
+  const relationships = useMemo(() => {
+    // If includeReferences is true, relationships should come from tableData
+    if (includeReferences && tableData?.relationships && Array.isArray(tableData.relationships)) {
+      return sortRelationships(tableData.relationships);
+    }
+    // Otherwise, use relationships from useTableRelationships hook
+    const rels = relationshipsData?.data?.relationships || [];
+    return sortRelationships(rels);
+  }, [includeReferences, tableData, relationshipsData?.data?.relationships]);
   const tableRows = useMemo(
     () => (tableData?.rows ? [...tableData.rows] : []),
     [tableData]

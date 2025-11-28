@@ -1,22 +1,21 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getTableData, getTableDataWithReferences } from '@/lib/db-manager';
-import { getDatabaseConfig } from '@/lib/db-config';
-import type { DatabaseName } from '@/lib/db-config';
+import { getTableData, getTableDataWithReferences, getTableDataWithConfig, getTableDataWithReferencesWithConfig } from '@/lib/db-manager';
+import type { DatabaseName, DatabaseConfigItem } from '@/lib/db-config';
+import { getMergedConfigFromParams } from '@/lib/utils/api-config-helper';
 import { logger } from '@/lib/logger';
 import { FLOW_NAMES } from '@/lib/constants/flow-constants';
+import { DEFAULT_TABLE_LIMIT, DEFAULT_TABLE_PAGE, HIDDEN_COLUMNS, HIDDEN_COLUMN_PATTERNS } from '@/lib/constants/table-constants';
+import { MIN_CHUNK_SIZE, MAX_CHUNK_SIZE, HTTP_STATUS_BAD_REQUEST, HTTP_STATUS_INTERNAL_SERVER_ERROR, VALID_DATABASES } from '@/lib/constants/db-constants';
 import { filterTableRows, FilterRelationships, normalizeVietnameseText } from '@/lib/utils/table-filter-utils';
-import { HIDDEN_COLUMNS, HIDDEN_COLUMN_PATTERNS } from '@/lib/constants/table-constants';
 import { errorResponse, successResponse, validateRequiredParams } from '@/lib/utils/api-response';
-
-const VALID_DATABASES: readonly DatabaseName[] = ['database_1', 'database_2'] as const;
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const databaseName = searchParams.get('database') as DatabaseName;
   const schemaName = searchParams.get('schema');
   const tableName = searchParams.get('table');
-  const limit = parseInt(searchParams.get('limit') || '100', 10);
-  const offset = parseInt(searchParams.get('offset') || '0', 10);
+  const limit = parseInt(searchParams.get('limit') || String(DEFAULT_TABLE_LIMIT), 10);
+  const offset = parseInt(searchParams.get('offset') || String(DEFAULT_TABLE_PAGE), 10);
   const includeReferences = searchParams.get('includeReferences') === 'true';
   const filtersParam = searchParams.get('filters');
   let filters: Record<string, string> = {};
@@ -54,7 +53,7 @@ export async function GET(request: NextRequest) {
   }
 
   // Validate database name
-  if (!VALID_DATABASES.includes(databaseName)) {
+  if (!VALID_DATABASES.includes(databaseName as typeof VALID_DATABASES[number])) {
     return errorResponse(
       `Invalid database name: ${databaseName}. Must be one of: ${VALID_DATABASES.join(', ')}`,
       'Invalid database name'
@@ -69,7 +68,7 @@ export async function GET(request: NextRequest) {
         message: 'Limit must be >= 1',
         error: 'Invalid limit',
       },
-      { status: 400 }
+      { status: HTTP_STATUS_BAD_REQUEST }
     );
   }
 
@@ -80,7 +79,7 @@ export async function GET(request: NextRequest) {
         message: 'Offset must be >= 0',
         error: 'Invalid offset',
       },
-      { status: 400 }
+      { status: HTTP_STATUS_BAD_REQUEST }
     );
   }
 
@@ -152,8 +151,14 @@ export async function GET(request: NextRequest) {
   try {
     flowLog.info(`Validating database configuration`);
     
-    // Get database config
-    const dbConfig = getDatabaseConfig(databaseName);
+    // Get merged config: customConfig || envConfig || defaults
+    const customConfigParam = searchParams.get('config');
+    flowLog.info(`Getting database configuration`, { 
+      database: databaseName,
+      hasCustomConfig: !!customConfigParam 
+    });
+    const dbConfig = getMergedConfigFromParams(databaseName, customConfigParam, flowLog);
+    
     if (!dbConfig.enabled) {
       flowLog.error(`Database ${databaseName} is disabled`);
       flowLog.end(false, { reason: 'Database disabled' });
@@ -163,7 +168,7 @@ export async function GET(request: NextRequest) {
           message: `Database ${databaseName} is disabled`,
           error: 'Database disabled',
         },
-        { status: 400 }
+        { status: HTTP_STATUS_BAD_REQUEST }
       );
     }
 
@@ -183,17 +188,18 @@ export async function GET(request: NextRequest) {
     if (!hasActiveFilters) {
       flowLog.info(`Fetching paginated table data (includeReferences: ${includeReferences})`);
 
+      // Always use *WithConfig functions for consistency: customConfig || envConfig || defaults
       const tableData = includeReferences
-        ? await getTableDataWithReferences(
-            databaseName,
+        ? await getTableDataWithReferencesWithConfig(
+            dbConfig,
             schemaName!,
             tableName!,
             limit,
             offset,
             flowId
           )
-        : await getTableData(
-            databaseName,
+        : await getTableDataWithConfig(
+            dbConfig,
             schemaName!,
             tableName!,
             limit,
@@ -264,8 +270,6 @@ export async function GET(request: NextRequest) {
     }
 
     // Active filters path – stream the table in chunks so that filtering happens on the full dataset
-    const MIN_CHUNK_SIZE = 500;
-    const MAX_CHUNK_SIZE = 5000;
     const chunkSize = Math.min(Math.max(limit, MIN_CHUNK_SIZE), MAX_CHUNK_SIZE);
 
     flowLog.info('Active filters detected – streaming table rows for server-side filtering', {
@@ -283,17 +287,18 @@ export async function GET(request: NextRequest) {
 
     while (true) {
       const chunkLimit = chunkSize;
+      // Always use *WithConfig functions for consistency: customConfig || envConfig || defaults
       const chunkData = includeReferences
-        ? await getTableDataWithReferences(
-            databaseName,
+        ? await getTableDataWithReferencesWithConfig(
+            dbConfig,
             schemaName!,
             tableName!,
             chunkLimit,
             chunkOffset,
             flowId
           )
-        : await getTableData(
-            databaseName,
+        : await getTableDataWithConfig(
+            dbConfig,
             schemaName!,
             tableName!,
             chunkLimit,
@@ -351,16 +356,7 @@ export async function GET(request: NextRequest) {
     // Loại bỏ các properties ẩn khỏi rows
     sortedRows = filterHiddenPropertiesFromRows(sortedRows);
 
-    flowLog.success('Filtered data prepared', {
-      filteredRowCount,
-      rowsReturned: sortedRows.length,
-      totalRows,
-      chunkSize,
-      chunksProcessed: chunkIndex,
-      relationshipCount,
-    });
-
-    flowLog.end(true, {
+    const summary = {
       rowsReturned: sortedRows.length,
       totalRows,
       columns: visibleColumns.length,
@@ -370,17 +366,12 @@ export async function GET(request: NextRequest) {
       relationshipCount,
       chunkSize,
       chunksProcessed: chunkIndex,
-    });
-
-    const summary = {
-      totalRows,
-      filteredRowCount,
       hasMore: filteredHasMore,
       limit,
       offset,
     };
 
-    flowLog.success('Table data fetched successfully', summary);
+    flowLog.success('Filtered data prepared', summary);
     flowLog.end(true, summary);
 
     return successResponse(
@@ -401,7 +392,7 @@ export async function GET(request: NextRequest) {
     flowLog.error('Unexpected error in API get table data', error);
     flowLog.end(false, { error: errorMessage });
 
-    return errorResponse('Failed to fetch table data', errorMessage, 500);
+    return errorResponse('Failed to fetch table data', errorMessage, HTTP_STATUS_INTERNAL_SERVER_ERROR);
   }
 }
 

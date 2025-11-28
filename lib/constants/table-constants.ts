@@ -11,6 +11,13 @@ export const DEFAULT_TABLE_LIMIT = 100;
 export const DEFAULT_TABLE_PAGE = 0;
 
 /**
+ * Constants for table list pagination
+ */
+export const TABLE_LIST_LIMIT_OPTIONS = [25, 50, 100, 200, 500,1000, 2000, 5000, 10000] as const;
+
+export const DEFAULT_TABLE_LIST_LIMIT = 50;
+
+/**
  * List of column names that should be hidden from table display
  * Add column names here to exclude them from API responses and table views
  */

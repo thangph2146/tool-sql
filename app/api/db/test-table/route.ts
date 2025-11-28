@@ -1,11 +1,11 @@
 import { NextRequest } from 'next/server';
-import { query, escapeSqlIdentifier } from '@/lib/db-manager';
-import { getDatabaseConfig } from '@/lib/db-config';
+import { escapeSqlIdentifier, convertToSqlConfig } from '@/lib/db-manager';
 import type { DatabaseName } from '@/lib/db-config';
 import { logger } from '@/lib/logger';
+import { HTTP_STATUS_INTERNAL_SERVER_ERROR, VALID_DATABASES } from '@/lib/constants/db-constants';
 import { errorResponse, successResponse, validateRequiredParams } from '@/lib/utils/api-response';
-
-const VALID_DATABASES: readonly DatabaseName[] = ['database_1', 'database_2'] as const;
+import { getMergedConfigFromParams } from '@/lib/utils/api-config-helper';
+import sql from 'mssql';
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -27,7 +27,7 @@ export async function GET(request: NextRequest) {
   }
 
   // Validate database name
-  if (!VALID_DATABASES.includes(databaseName)) {
+  if (!VALID_DATABASES.includes(databaseName as typeof VALID_DATABASES[number])) {
     return errorResponse(
       `Invalid database name: ${databaseName}. Must be one of: ${VALID_DATABASES.join(', ')}`,
       'Invalid database name'
@@ -45,8 +45,14 @@ export async function GET(request: NextRequest) {
   try {
     flowLog.info(`Testing table accessibility: ${schemaName}.${tableName}`);
 
-    // Get database config
-    const dbConfig = getDatabaseConfig(databaseName);
+    // Get merged config: customConfig || envConfig || defaults
+    const customConfigParam = searchParams.get('config');
+    flowLog.info(`Getting database configuration`, { 
+      database: databaseName,
+      hasCustomConfig: !!customConfigParam 
+    });
+    const dbConfig = getMergedConfigFromParams(databaseName, customConfigParam, flowLog);
+    
     if (!dbConfig.enabled) {
       flowLog.error(`Database ${databaseName} is disabled`);
       flowLog.end(false, { reason: 'Database disabled' });
@@ -64,39 +70,47 @@ export async function GET(request: NextRequest) {
       const escapedSchema = escapeSqlIdentifier(schemaName!);
       const escapedTable = escapeSqlIdentifier(tableName!);
       
-      const testResult = await query(databaseName, `
-        SELECT TOP 1 *
-        FROM [${escapedSchema}].[${escapedTable}]
-      `);
+      // Always use merged config for consistency: customConfig || envConfig || defaults
+      const sqlConfig = convertToSqlConfig(dbConfig);
+      const tempPool = new sql.ConnectionPool(sqlConfig);
+      await tempPool.connect();
+      try {
+        const testResult = await tempPool.request().query(`
+          SELECT TOP 1 *
+          FROM [${escapedSchema}].[${escapedTable}]
+        `);
 
-      // Get column count from first row if available
-      const columnsCount = testResult.recordset.length > 0 && testResult.recordset[0]
-        ? Object.keys(testResult.recordset[0]).length
-        : 0;
-      const hasData = testResult.recordset.length > 0;
+        // Get column count from first row if available
+        const columnsCount = testResult.recordset.length > 0 && testResult.recordset[0]
+          ? Object.keys(testResult.recordset[0]).length
+          : 0;
+        const hasData = testResult.recordset.length > 0;
 
-      flowLog.success(`Table ${schemaName}.${tableName} is accessible`, {
-        columnsCount,
-        hasData,
-      });
+        flowLog.success(`Table ${schemaName}.${tableName} is accessible`, {
+          columnsCount,
+          hasData,
+        });
 
-      flowLog.end(true, {
-        accessible: true,
-        hasData,
-        columnsCount,
-      });
-
-      return successResponse(
-        `Table ${schemaName}.${tableName} is accessible`,
-        {
-          database: databaseName,
-          schema: schemaName,
-          table: tableName,
+        flowLog.end(true, {
           accessible: true,
           hasData,
           columnsCount,
-        }
-      );
+        });
+
+        return successResponse(
+          `Table ${schemaName}.${tableName} is accessible`,
+          {
+            database: databaseName,
+            schema: schemaName,
+            table: tableName,
+            accessible: true,
+            hasData,
+            columnsCount,
+          }
+        );
+      } finally {
+        await tempPool.close();
+      }
     } catch (queryError) {
       const errorMessage = queryError instanceof Error 
         ? queryError.message 
@@ -108,7 +122,7 @@ export async function GET(request: NextRequest) {
       return errorResponse(
         `Table ${schemaName}.${tableName} is not accessible: ${errorMessage}`,
         errorMessage,
-        500
+        HTTP_STATUS_INTERNAL_SERVER_ERROR
       );
     }
   } catch (error) {
@@ -119,7 +133,7 @@ export async function GET(request: NextRequest) {
     return errorResponse(
       'Failed to test table',
       errorMessage,
-      500
+      HTTP_STATUS_INTERNAL_SERVER_ERROR
     );
   }
 }

@@ -3,6 +3,13 @@
  * Manages configuration for multiple databases (database_1 and database_2)
  */
 
+import { 
+  DEFAULT_CONNECTION_TIMEOUT, 
+  DEFAULT_REQUEST_TIMEOUT, 
+  DEFAULT_ENABLED,
+  DEFAULT_USE_WINDOWS_AUTH
+} from '@/lib/constants/db-constants';
+
 export type DatabaseName = 'database_1' | 'database_2';
 
 export interface DatabaseConfigItem {
@@ -39,8 +46,8 @@ export function getDatabaseConfigSystem(): DatabaseConfigSystem {
   const defaultServer = process.env.DB_SERVER || 'DESKTOP-F3UFVI3';
   const defaultPort = process.env.DB_PORT ? parseInt(process.env.DB_PORT) : undefined;
   const defaultInstanceName = process.env.DB_INSTANCE_NAME;
-  const defaultConnectionTimeout = parseInt(process.env.DB_CONNECTION_TIMEOUT || '30000');
-  const defaultRequestTimeout = parseInt(process.env.DB_REQUEST_TIMEOUT || '30000');
+  const defaultConnectionTimeout = parseInt(process.env.DB_CONNECTION_TIMEOUT || String(DEFAULT_CONNECTION_TIMEOUT));
+  const defaultRequestTimeout = parseInt(process.env.DB_REQUEST_TIMEOUT || String(DEFAULT_REQUEST_TIMEOUT));
   const useWindowsAuth = process.env.DB_USE_WINDOWS_AUTH === 'true' || !process.env.DB_USER;
   
   // Legacy DB_DATABASE support (if exists, use as fallback for database_1)
@@ -121,19 +128,75 @@ export function getDatabaseConfigSystem(): DatabaseConfigSystem {
 }
 
 /**
+ * Merge config with defaults to ensure no null/undefined values
+ * Uses || operator consistently: overrideConfig || baseConfig || defaults
+ * This ensures all required fields have valid values (server-side helper)
+ */
+export function mergeConfigWithDefaults(
+  baseConfig: DatabaseConfigItem,
+  overrideConfig?: Partial<DatabaseConfigItem>
+): DatabaseConfigItem {
+  // Default values to ensure no null/undefined (using constants from @constants)
+  const defaultConnectionTimeout = DEFAULT_CONNECTION_TIMEOUT;
+  const defaultRequestTimeout = DEFAULT_REQUEST_TIMEOUT;
+  const defaultEnabled = DEFAULT_ENABLED;
+  const defaultUseWindowsAuth = DEFAULT_USE_WINDOWS_AUTH;
+
+  // Merge using || operator for strings/numbers, ?? for booleans/optional
+  // Pattern: overrideConfig || baseConfig || defaults (strings/numbers)
+  // Pattern: overrideConfig ?? baseConfig ?? defaults (booleans - preserve false)
+  const merged: DatabaseConfigItem = {
+    name: overrideConfig?.name || baseConfig.name,
+    // Required string fields: override || base || empty string
+    server: overrideConfig?.server || baseConfig.server || '',
+    database: overrideConfig?.database || baseConfig.database || '',
+    displayName: overrideConfig?.displayName || baseConfig.displayName || baseConfig.name || '',
+    // Boolean fields: override ?? base ?? default (preserve false values)
+    enabled: overrideConfig?.enabled ?? baseConfig.enabled ?? defaultEnabled,
+    useWindowsAuth: overrideConfig?.useWindowsAuth ?? baseConfig.useWindowsAuth ?? defaultUseWindowsAuth,
+    // Numeric fields: override || base || default
+    connectionTimeout: overrideConfig?.connectionTimeout || baseConfig.connectionTimeout || defaultConnectionTimeout,
+    requestTimeout: overrideConfig?.requestTimeout || baseConfig.requestTimeout || defaultRequestTimeout,
+    // Optional fields: override ?? base (allow undefined)
+    port: overrideConfig?.port ?? baseConfig.port,
+    instanceName: overrideConfig?.instanceName || baseConfig.instanceName,
+    description: overrideConfig?.description || baseConfig.description,
+    // User/password: only set if not using Windows Auth
+    user: (overrideConfig?.useWindowsAuth ?? baseConfig.useWindowsAuth ?? defaultUseWindowsAuth)
+      ? undefined
+      : (overrideConfig?.user || baseConfig.user),
+    password: (overrideConfig?.useWindowsAuth ?? baseConfig.useWindowsAuth ?? defaultUseWindowsAuth)
+      ? undefined
+      : (overrideConfig?.password || baseConfig.password),
+  };
+
+  return merged;
+}
+
+/**
  * Get configuration for a specific database
+ * This function is used on the server side and returns env config only
+ * For client side, use getMergedDatabaseConfig from db-config-storage
  */
 export function getDatabaseConfig(databaseName: DatabaseName): DatabaseConfigItem {
   const configSystem = getDatabaseConfigSystem();
-  return configSystem.databases[databaseName];
+  // Ensure defaults are applied even for env config
+  return mergeConfigWithDefaults(configSystem.databases[databaseName]);
 }
 
 /**
  * Get all enabled databases
+ * Optionally limit the number of databases returned
  */
-export function getEnabledDatabases(): DatabaseConfigItem[] {
+export function getEnabledDatabases(maxCount?: number): DatabaseConfigItem[] {
   const configSystem = getDatabaseConfigSystem();
-  return Object.values(configSystem.databases).filter(db => db.enabled);
+  const enabled = Object.values(configSystem.databases).filter(db => db.enabled);
+  
+  if (maxCount !== undefined && maxCount > 0) {
+    return enabled.slice(0, maxCount);
+  }
+  
+  return enabled;
 }
 
 /**
@@ -230,8 +293,8 @@ export function getConfigSummary(): {
       database: config.database,
       useWindowsAuth: config.useWindowsAuth,
       hasUser: !!config.user,
-      connectionTimeout: config.connectionTimeout || 30000,
-      requestTimeout: config.requestTimeout || 30000,
+      connectionTimeout: config.connectionTimeout || DEFAULT_CONNECTION_TIMEOUT,
+      requestTimeout: config.requestTimeout || DEFAULT_REQUEST_TIMEOUT,
     };
   });
 

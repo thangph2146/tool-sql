@@ -1,10 +1,9 @@
 import { NextRequest } from 'next/server';
-import { getTableForeignKeysWithConfig, getTableReferencedByWithConfig } from '@/lib/db-manager';
+import { getTableStatsWithConfig } from '@/lib/db-manager';
 import type { DatabaseName } from '@/lib/db-config';
 import { logger } from '@/lib/logger';
 import { FLOW_NAMES } from '@/lib/constants/flow-constants';
 import { HTTP_STATUS_INTERNAL_SERVER_ERROR, VALID_DATABASES } from '@/lib/constants/db-constants';
-import { sortRelationships } from '@/lib/utils/relationship-utils';
 import { errorResponse, successResponse, validateRequiredParams } from '@/lib/utils/api-response';
 import { getMergedConfigFromParams } from '@/lib/utils/api-config-helper';
 
@@ -35,7 +34,7 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const flowName = FLOW_NAMES.API_GET_TABLE_RELATIONSHIPS(databaseName);
+  const flowName = FLOW_NAMES.API_GET_TABLE_STATS?.(databaseName) || `API_GET_TABLE_STATS_${databaseName.toUpperCase()}`;
   const flowId = logger.startFlow(flowName, {
     database: databaseName,
     schema: schemaName,
@@ -64,72 +63,40 @@ export async function GET(request: NextRequest) {
     }
 
     flowLog.success(`Database ${databaseName} is enabled`);
-    flowLog.info(`Fetching foreign key relationships for ${schemaName}.${tableName}`);
+    flowLog.info(`Fetching table stats for ${schemaName}.${tableName}`);
 
-    // Always use *WithConfig functions for consistency: customConfig || envConfig || defaults
-    // Fetch outgoing foreign keys (FK từ table hiện tại đi ra)
-    const outgoingForeignKeys = await getTableForeignKeysWithConfig(
+    // Always use *WithConfig function for consistency: customConfig || envConfig || defaults
+    const stats = await getTableStatsWithConfig(
       dbConfig,
       schemaName!,
       tableName!,
       flowId
     );
-
-    // Fetch incoming foreign keys (FK từ các table khác trỏ vào table hiện tại)
-    const incomingForeignKeys = await getTableReferencedByWithConfig(
-      dbConfig,
-      schemaName!,
-      tableName!,
-      flowId
-    );
-
-    // Gộp cả hai loại relationships và loại bỏ duplicate
-    // Sử dụng Map với key là combination của các trường để đảm bảo unique
-    const relationshipsMap = new Map<string, typeof outgoingForeignKeys[0]>();
-    
-    // Thêm outgoing relationships
-    outgoingForeignKeys.forEach((rel) => {
-      const key = `${rel.FK_NAME}||${rel.FK_SCHEMA}.${rel.FK_TABLE}.${rel.FK_COLUMN}||${rel.PK_SCHEMA}.${rel.PK_TABLE}.${rel.PK_COLUMN}`;
-      if (!relationshipsMap.has(key)) {
-        relationshipsMap.set(key, rel);
-      }
-    });
-    
-    // Thêm incoming relationships (có thể trùng với outgoing nếu có self-reference)
-    incomingForeignKeys.forEach((rel) => {
-      const key = `${rel.FK_NAME}||${rel.FK_SCHEMA}.${rel.FK_TABLE}.${rel.FK_COLUMN}||${rel.PK_SCHEMA}.${rel.PK_TABLE}.${rel.PK_COLUMN}`;
-      if (!relationshipsMap.has(key)) {
-        relationshipsMap.set(key, rel);
-      }
-    });
-    
-    const allRelationships = Array.from(relationshipsMap.values());
-    const sortedRelationships = sortRelationships(allRelationships);
 
     const summary = {
-      outgoingCount: outgoingForeignKeys.length,
-      incomingCount: incomingForeignKeys.length,
-      totalCount: sortedRelationships.length,
+      rowCount: stats.rowCount,
+      columnCount: stats.columnCount,
+      relationshipCount: stats.relationshipCount,
     };
 
-    flowLog.success('Relationships fetched successfully', summary);
+    flowLog.success('Table stats fetched successfully', summary);
     flowLog.end(true, summary);
 
     return successResponse(
-      `Successfully fetched relationships for ${schemaName}.${tableName}`,
+      `Successfully fetched table stats for ${schemaName}.${tableName}`,
       {
         database: databaseName,
         schema: schemaName,
         table: tableName,
-        relationships: sortedRelationships,
+        ...stats,
       }
     );
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
-    flowLog.error('Unexpected error in API get table relationships', error);
+    flowLog.error('Unexpected error in API get table stats', error);
     flowLog.end(false, { error: errorMessage });
 
-    return errorResponse('Failed to fetch table relationships', errorMessage, HTTP_STATUS_INTERNAL_SERVER_ERROR);
+    return errorResponse('Failed to fetch table stats', errorMessage, HTTP_STATUS_INTERNAL_SERVER_ERROR);
   }
 }
 
