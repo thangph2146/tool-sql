@@ -359,7 +359,7 @@ export async function GET(request: NextRequest) {
     const summary = {
       rowsReturned: sortedRows.length,
       totalRows,
-      columns: visibleColumns.length,
+      columnCount: visibleColumns.length,
       filteredRowCount,
       filtersApplied: filters,
       includeReferences,

@@ -164,7 +164,7 @@ export function TableDataView({
   const filteredRowCount = finalTableData?.filteredRowCount ?? tableRows.length;
 
   const visibleColumns = useMemo(() => {
-    if (!finalTableData?.columns) return [];
+    if (!finalTableData?.columns || !Array.isArray(finalTableData.columns)) return [];
     return filterHiddenColumns(finalTableData.columns);
   }, [finalTableData]);
 

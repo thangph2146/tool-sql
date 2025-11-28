@@ -21,12 +21,12 @@ export function shouldHideColumn(columnName: string | number): boolean {
   const colLower = colStr.toLowerCase();
   
   // Check exact matches (case-insensitive)
-  if (HIDDEN_COLUMNS.some(hidden => colLower === hidden.toLowerCase())) {
+  if (HIDDEN_COLUMNS.some((hidden: string) => colLower === hidden.toLowerCase())) {
     return true;
   }
   
   // Check patterns (endsWith)
-  if (HIDDEN_COLUMN_PATTERNS.some(pattern => colStr.endsWith(pattern))) {
+  if (HIDDEN_COLUMN_PATTERNS.some((pattern: string) => colStr.endsWith(pattern))) {
     return true;
   }
   
@@ -38,8 +38,8 @@ export function shouldHideColumn(columnName: string | number): boolean {
  * @param columns - Array of column names
  * @returns Filtered array with hidden columns removed
  */
-export function filterHiddenColumns(columns: (string | number)[]): string[] {
-  if (!columns || columns.length === 0) return [];
+export function filterHiddenColumns(columns: (string | number)[] | null | undefined): string[] {
+  if (!columns || !Array.isArray(columns) || columns.length === 0) return [];
   
   return columns
     .filter(col => !shouldHideColumn(col))
