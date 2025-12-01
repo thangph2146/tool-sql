@@ -1,6 +1,6 @@
 'use client';
 
-import { useMemo, useState } from 'react';
+import { useMemo, useState, useEffect } from 'react';
 import { Database, CheckCircle2, XCircle, Loader2, RefreshCw, Settings } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { Button } from '@/components/ui/button';
@@ -30,12 +30,12 @@ export function DatabaseCard({
   const [configDialogOpen, setConfigDialogOpen] = useState(false);
   
   // Get database config to display actual database name
-  // Use merged config (user config + env config) on client side
-  const dbConfig = useMemo(() => {
-    if (typeof window !== 'undefined') {
-      return getMergedDatabaseConfig(databaseName);
-    }
-    return getDatabaseConfig(databaseName);
+  // Start with base config to avoid hydration mismatch, then update with merged config on client
+  const [dbConfig, setDbConfig] = useState(() => getDatabaseConfig(databaseName));
+  
+  // Update to merged config after mount to avoid hydration mismatch
+  useEffect(() => {
+    setDbConfig(getMergedDatabaseConfig(databaseName));
   }, [databaseName]);
   
   const { data: connectionData, isLoading: connectionLoading, isError: connectionError } = 

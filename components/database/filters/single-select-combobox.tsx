@@ -13,7 +13,6 @@ import { XCircle } from "lucide-react";
 import { useDebounce } from "@/lib/hooks/use-debounce";
 
 interface SingleSelectComboboxProps {
-  column: string;
   options: string[];
   value: string;
   placeholder?: string;
@@ -24,7 +23,6 @@ interface SingleSelectComboboxProps {
 }
 
 export function SingleSelectCombobox({
-  column,
   options,
   value,
   placeholder = "Chọn một giá trị...",

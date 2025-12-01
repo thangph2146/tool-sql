@@ -138,12 +138,12 @@ export function DatabaseTablesList({
   >(new Map());
 
   // Get database config to display actual database name
-  // Use merged config (user config || env config || defaults)
-  const dbConfig = useMemo(() => {
-    if (typeof window !== "undefined") {
-      return getMergedDatabaseConfig(databaseName);
-    }
-    return getDatabaseConfig(databaseName);
+  // Start with base config to avoid hydration mismatch, then update with merged config on client
+  const [dbConfig, setDbConfig] = useState(() => getDatabaseConfig(databaseName));
+  
+  // Update to merged config after mount to avoid hydration mismatch
+  useEffect(() => {
+    setDbConfig(getMergedDatabaseConfig(databaseName));
   }, [databaseName]);
 
   // Server-side filtering and pagination - tables are already filtered and paginated from API

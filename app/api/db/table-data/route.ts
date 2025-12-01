@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getTableData, getTableDataWithReferences, getTableDataWithConfig, getTableDataWithReferencesWithConfig } from '@/lib/db-manager';
-import type { DatabaseName, DatabaseConfigItem } from '@/lib/db-config';
+import { getTableDataWithConfig, getTableDataWithReferencesWithConfig } from '@/lib/db-manager';
+import type { DatabaseName } from '@/lib/db-config';
 import { getMergedConfigFromParams } from '@/lib/utils/api-config-helper';
 import { logger } from '@/lib/logger';
 import { FLOW_NAMES } from '@/lib/constants/flow-constants';

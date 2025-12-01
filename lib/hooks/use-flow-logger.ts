@@ -1,4 +1,4 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import { logger } from '@/lib/logger';
 
 type FlowLogger = ReturnType<typeof logger.createFlowLogger>;
@@ -22,14 +22,29 @@ export function useFlowLogger({
 }: UseFlowLoggerOptions) {
   const flowLogRef = useRef<FlowLogger | null>(null);
   const flowIdRef = useRef<string | null>(null);
+  const [flowLog, setFlowLog] = useState<FlowLogger | null>(null);
+  const [flowId, setFlowId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {
+      // Use setTimeout to defer state update and avoid cascading renders
+      setTimeout(() => {
+        setFlowLog(null);
+        setFlowId(null);
+      }, 0);
+      return;
+    }
 
     // Start flow
-    const flowId = logger.startFlow(flowName, metadata);
-    flowIdRef.current = flowId;
-    flowLogRef.current = logger.createFlowLogger(flowId);
+    const newFlowId = logger.startFlow(flowName, metadata);
+    const newFlowLog = logger.createFlowLogger(newFlowId);
+    flowIdRef.current = newFlowId;
+    flowLogRef.current = newFlowLog;
+    // Use setTimeout to defer state update and avoid cascading renders
+    setTimeout(() => {
+      setFlowId(newFlowId);
+      setFlowLog(newFlowLog);
+    }, 0);
 
     // Cleanup: end flow on unmount
     return () => {
@@ -40,21 +55,30 @@ export function useFlowLogger({
         onEnd?.(success, summary);
         flowLogRef.current = null;
         flowIdRef.current = null;
+        // Use setTimeout to defer state update and avoid cascading renders
+        setTimeout(() => {
+          setFlowLog(null);
+          setFlowId(null);
+        }, 0);
       }
     };
-  }, [flowName, enabled]); // Only recreate if flowName or enabled changes
+  }, [flowName, enabled, metadata, onEnd]);
+
+  const end = useCallback((success: boolean = true, summary?: Record<string, unknown>) => {
+    if (flowLogRef.current) {
+      flowLogRef.current.end(success, summary);
+      onEnd?.(success, summary);
+      flowLogRef.current = null;
+      flowIdRef.current = null;
+      setFlowLog(null);
+      setFlowId(null);
+    }
+  }, [onEnd]);
 
   return {
-    flowLog: flowLogRef.current,
-    flowId: flowIdRef.current,
-    end: (success: boolean = true, summary?: Record<string, unknown>) => {
-      if (flowLogRef.current) {
-        flowLogRef.current.end(success, summary);
-        onEnd?.(success, summary);
-        flowLogRef.current = null;
-        flowIdRef.current = null;
-      }
-    },
+    flowLog,
+    flowId,
+    end,
   };
 }
 
@@ -71,9 +95,18 @@ export function useFlowLoggerWithKey<T extends string | number>(
   const flowLogRef = useRef<FlowLogger | null>(null);
   const flowIdRef = useRef<string | null>(null);
   const currentKeyRef = useRef<T | null>(null);
+  const [flowLog, setFlowLog] = useState<FlowLogger | null>(null);
+  const [flowId, setFlowId] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!enabled) return;
+    if (!enabled) {
+      // Use setTimeout to defer state update and avoid cascading renders
+      setTimeout(() => {
+        setFlowLog(null);
+        setFlowId(null);
+      }, 0);
+      return;
+    }
 
     const currentKey = key;
 
@@ -86,16 +119,27 @@ export function useFlowLoggerWithKey<T extends string | number>(
       });
       flowLogRef.current = null;
       flowIdRef.current = null;
+      // Use setTimeout to defer state update and avoid cascading renders
+      setTimeout(() => {
+        setFlowLog(null);
+        setFlowId(null);
+      }, 0);
     }
 
     // Start new flow if not exists or key changed
     if (!flowLogRef.current || currentKeyRef.current !== currentKey) {
       const name = flowName(currentKey);
       const meta = metadata ? metadata(currentKey) : undefined;
-      const flowId = logger.startFlow(name, meta);
-      flowIdRef.current = flowId;
-      flowLogRef.current = logger.createFlowLogger(flowId);
+      const newFlowId = logger.startFlow(name, meta);
+      const newFlowLog = logger.createFlowLogger(newFlowId);
+      flowIdRef.current = newFlowId;
+      flowLogRef.current = newFlowLog;
       currentKeyRef.current = currentKey;
+      // Use setTimeout to defer state update and avoid cascading renders
+      setTimeout(() => {
+        setFlowId(newFlowId);
+        setFlowLog(newFlowLog);
+      }, 0);
     }
 
     // Cleanup: end flow on unmount
@@ -105,21 +149,30 @@ export function useFlowLoggerWithKey<T extends string | number>(
         flowLogRef.current = null;
         flowIdRef.current = null;
         currentKeyRef.current = null;
+        // Use setTimeout to defer state update and avoid cascading renders
+        setTimeout(() => {
+          setFlowLog(null);
+          setFlowId(null);
+        }, 0);
       }
     };
   }, [key, enabled, flowName, metadata]);
 
+  const end = useCallback((success: boolean = true, summary?: Record<string, unknown>) => {
+    if (flowLogRef.current) {
+      flowLogRef.current.end(success, summary);
+      flowLogRef.current = null;
+      flowIdRef.current = null;
+      currentKeyRef.current = null;
+      setFlowLog(null);
+      setFlowId(null);
+    }
+  }, []);
+
   return {
-    flowLog: flowLogRef.current,
-    flowId: flowIdRef.current,
-    end: (success: boolean = true, summary?: Record<string, unknown>) => {
-      if (flowLogRef.current) {
-        flowLogRef.current.end(success, summary);
-        flowLogRef.current = null;
-        flowIdRef.current = null;
-        currentKeyRef.current = null;
-      }
-    },
+    flowLog,
+    flowId,
+    end,
   };
 }
 

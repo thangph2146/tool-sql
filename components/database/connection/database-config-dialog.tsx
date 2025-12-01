@@ -18,6 +18,7 @@ import { getDatabaseConfig } from "@/lib/db-config";
 import {
   getMergedDatabaseConfig,
   updateUserDatabaseConfig,
+  getUserDatabaseConfig,
   resetUserDatabaseConfig,
 } from "@/lib/utils/db-config-storage";
 import { DEFAULT_DB_PORT, DEFAULT_CONNECTION_TIMEOUT, DEFAULT_REQUEST_TIMEOUT } from "@/lib/constants/db-constants";
@@ -59,20 +60,23 @@ export function DatabaseConfigDialog({
   useEffect(() => {
     if (open) {
       const currentMerged = getMergedDatabaseConfig(databaseName);
-      setConfig({
-        displayName: currentMerged.displayName,
-        server: currentMerged.server,
-        port: currentMerged.port,
-        instanceName: currentMerged.instanceName,
-        database: currentMerged.database,
-        useWindowsAuth: currentMerged.useWindowsAuth,
-        user: currentMerged.user,
-        password: currentMerged.password,
-        connectionTimeout: currentMerged.connectionTimeout,
-        requestTimeout: currentMerged.requestTimeout,
-        enabled: currentMerged.enabled,
-      });
-      setHasChanges(false);
+      // Use setTimeout to defer state update and avoid cascading renders
+      setTimeout(() => {
+        setConfig({
+          displayName: currentMerged.displayName,
+          server: currentMerged.server,
+          port: currentMerged.port,
+          instanceName: currentMerged.instanceName,
+          database: currentMerged.database,
+          useWindowsAuth: currentMerged.useWindowsAuth,
+          user: currentMerged.user,
+          password: currentMerged.password,
+          connectionTimeout: currentMerged.connectionTimeout,
+          requestTimeout: currentMerged.requestTimeout,
+          enabled: currentMerged.enabled,
+        });
+        setHasChanges(false);
+      }, 0);
     }
   }, [open, databaseName]);
 
@@ -92,7 +96,10 @@ export function DatabaseConfigDialog({
       config.requestTimeout !== currentMerged.requestTimeout ||
       config.enabled !== currentMerged.enabled;
 
-    setHasChanges(hasChangesCheck);
+    // Use setTimeout to defer state update and avoid cascading renders
+    setTimeout(() => {
+      setHasChanges(hasChangesCheck);
+    }, 0);
   }, [config, databaseName]);
 
   const handleSave = () => {
@@ -126,7 +133,6 @@ export function DatabaseConfigDialog({
 
   const isUsingUserConfig = useMemo(() => {
     if (typeof window === 'undefined') return false;
-    const { getUserDatabaseConfig } = require('@/lib/utils/db-config-storage');
     const userConfigs = getUserDatabaseConfig();
     return !!userConfigs[databaseName];
   }, [databaseName]);
@@ -387,7 +393,7 @@ export function DatabaseConfigDialog({
           {isUsingUserConfig && (
             <div className="p-3 bg-blue-50 dark:bg-blue-950/20 border border-blue-200 dark:border-blue-800 rounded-md">
               <p className="text-xs text-blue-700 dark:text-blue-300">
-                ⓘ Đang sử dụng cấu hình người dùng. Nhấn "Reset về mặc định" để quay lại cấu hình từ .env
+                ⓘ Đang sử dụng cấu hình người dùng. Nhấn &quot;Reset về mặc định&quot; để quay lại cấu hình từ .env
               </p>
             </div>
           )}

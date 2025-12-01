@@ -30,7 +30,10 @@ export function DatabaseDisplaySettings({
   // Load current setting when dialog opens
   useEffect(() => {
     if (open) {
-      setMaxDatabases(getMaxDatabasesToShow());
+      // Use setTimeout to defer state update and avoid cascading renders
+      setTimeout(() => {
+        setMaxDatabases(getMaxDatabasesToShow());
+      }, 0);
     }
   }, [open]);
 
