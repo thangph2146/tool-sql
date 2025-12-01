@@ -1,11 +1,12 @@
 "use client";
 
-import { useState, useMemo, useEffect } from "react";
+import { useState, useMemo, useEffect, useCallback } from "react";
 import { GitCompare, BarChart3 } from "lucide-react";
 import type { DatabaseName } from "@/lib/db-config";
 import { useTableData, useTableRelationships } from "@/lib/hooks/use-database-query";
 import { useTableFilters } from "@/lib/hooks/use-table-filters";
 import { useTableComparison } from "@/lib/hooks/use-table-comparison";
+import { useTablePagination } from "@/lib/hooks/use-table-pagination";
 import {
   Dialog,
   DialogContent,
@@ -56,14 +57,11 @@ export function TableComparisonView({
 }: TableComparisonViewProps) {
   const [leftLimit, setLeftLimit] = useState(DEFAULT_TABLE_LIMIT);
   const [rightLimit, setRightLimit] = useState(DEFAULT_TABLE_LIMIT);
-  const [page] = useState(0);
   const [showLeftFilters, setShowLeftFilters] = useState(false);
   const [showRightFilters, setShowRightFilters] = useState(false);
   const [includeReferences, setIncludeReferences] = useState(true);
   const [combinedColumns, setCombinedColumns] = useState<CombinedColumn[]>([]);
   const [showSummaryDialog, setShowSummaryDialog] = useState(false);
-  const leftOffset = page * leftLimit;
-  const rightOffset = page * rightLimit;
 
   // Flow logging with key-based lifecycle (only when open)
   const comparisonKey = open
@@ -94,7 +92,6 @@ export function TableComparisonView({
       includeReferences,
       leftLimit,
       rightLimit,
-      page,
     }),
     open
   );
@@ -191,13 +188,13 @@ export function TableComparisonView({
   const leftTableFilters = useTableFilters();
   const rightTableFilters = useTableFilters();
 
-  // Fetch data for both tables with separate limits
+  // Fetch initial data for both tables (offset 0)
   const leftData = useTableData(
     leftTable.databaseName,
     leftTable.schemaName,
     leftTable.tableName,
     leftLimit,
-    leftOffset,
+    0, // Start with offset 0
     open, // Only fetch when dialog/view is open
     includeReferences,
     leftTableFilters.debouncedFilters
@@ -208,37 +205,88 @@ export function TableComparisonView({
     rightTable.schemaName,
     rightTable.tableName,
     rightLimit,
-    rightOffset,
+    0, // Start with offset 0
     open, // Only fetch when dialog/view is open
     includeReferences,
     rightTableFilters.debouncedFilters
   );
 
-  const leftTableData = leftData.data?.data;
-  const rightTableData = rightData.data?.data;
+  // Get totalRows from initial data fetch (will be updated after data loads)
+  const leftTableData = leftData?.data?.data;
+  const rightTableData = rightData?.data?.data;
+  const leftTotalRows = leftTableData?.totalRows ?? 0;
+  const rightTotalRows = rightTableData?.totalRows ?? 0;
+
+  // Pagination hooks for both tables
+  const leftPagination = useTablePagination({
+    totalRows: leftTotalRows,
+    limit: leftLimit,
+    onLimitChange: useCallback((newLimit: number) => {
+      setLeftLimit(newLimit);
+    }, []),
+  });
+
+  const rightPagination = useTablePagination({
+    totalRows: rightTotalRows,
+    limit: rightLimit,
+    onLimitChange: useCallback((newLimit: number) => {
+      setRightLimit(newLimit);
+    }, []),
+  });
+
+  // Fetch paginated data when offset changes (only if offset > 0 to avoid duplicate call)
+  const { data: leftPaginatedData, isLoading: isLeftPaginatedLoading, error: leftPaginatedError } = useTableData(
+    leftTable.databaseName,
+    leftTable.schemaName,
+    leftTable.tableName,
+    leftLimit,
+    leftPagination.offset,
+    open && leftPagination.offset > 0, // Only fetch if offset > 0
+    includeReferences,
+    leftTableFilters.debouncedFilters
+  );
+
+  const { data: rightPaginatedData, isLoading: isRightPaginatedLoading, error: rightPaginatedError } = useTableData(
+    rightTable.databaseName,
+    rightTable.schemaName,
+    rightTable.tableName,
+    rightLimit,
+    rightPagination.offset,
+    open && rightPagination.offset > 0, // Only fetch if offset > 0
+    includeReferences,
+    rightTableFilters.debouncedFilters
+  );
+
+  // Use paginated data if offset > 0, otherwise use initial data
+  const finalLeftTableData = leftPagination.offset > 0 ? leftPaginatedData?.data : leftTableData;
+  const finalRightTableData = rightPagination.offset > 0 ? rightPaginatedData?.data : rightTableData;
+  const finalLeftIsLoading = leftPagination.offset > 0 ? isLeftPaginatedLoading : leftData.isLoading;
+  const finalRightIsLoading = rightPagination.offset > 0 ? isRightPaginatedLoading : rightData.isLoading;
+  const finalLeftError = leftPagination.offset > 0 ? leftPaginatedError : leftData.error;
+  const finalRightError = rightPagination.offset > 0 ? rightPaginatedError : rightData.error;
 
   // Log when table data is loaded
   useEffect(() => {
-    if (leftTableData && rightTableData && flowLog) {
+    if (finalLeftTableData && finalRightTableData && flowLog) {
       flowLog.success('Comparison data loaded', {
         leftTable: {
-          rowsLoaded: leftTableData.rows.length,
-          totalRows: leftTableData.totalRows,
-          columns: leftTableData.columns.length,
+          rowsLoaded: finalLeftTableData.rows.length,
+          totalRows: finalLeftTableData.totalRows,
+          columns: finalLeftTableData.columns.length,
         },
         rightTable: {
-          rowsLoaded: rightTableData.rows.length,
-          totalRows: rightTableData.totalRows,
-          columns: rightTableData.columns.length,
+          rowsLoaded: finalRightTableData.rows.length,
+          totalRows: finalRightTableData.totalRows,
+          columns: finalRightTableData.columns.length,
         },
-        leftOffset,
-        rightOffset,
+        leftOffset: leftPagination.offset,
+        rightOffset: rightPagination.offset,
         leftLimit,
         rightLimit,
         includeReferences,
       });
     }
-  }, [leftTableData, rightTableData, leftOffset, rightOffset, leftLimit, rightLimit, includeReferences, flowLog]);
+  }, [finalLeftTableData, finalRightTableData, leftPagination.offset, rightPagination.offset, leftLimit, rightLimit, includeReferences, flowLog]);
 
   // Log errors and loading states
   useEffect(() => {
@@ -572,8 +620,8 @@ export function TableComparisonView({
   // Calculate comparison statistics
   const comparisonStats = useMemo(() => {
     // Get actual total rows from table data (not limited rows)
-    const leftTotalRows = leftTableData?.totalRows ?? 0;
-    const rightTotalRows = rightTableData?.totalRows ?? 0;
+    const leftTotalRows = finalLeftTableData?.totalRows ?? 0;
+    const rightTotalRows = finalRightTableData?.totalRows ?? 0;
     const actualTotalRows = Math.max(leftTotalRows, rightTotalRows);
 
     // Get rows that were actually compared
@@ -680,8 +728,8 @@ export function TableComparisonView({
   ]);
 
   // Memoize computed values for performance
-  const isLoading = useMemo(() => leftData.isLoading || rightData.isLoading, [leftData.isLoading, rightData.isLoading]);
-  const hasError = useMemo(() => leftData.error || rightData.error, [leftData.error, rightData.error]);
+  const isLoading = useMemo(() => finalLeftIsLoading || finalRightIsLoading, [finalLeftIsLoading, finalRightIsLoading]);
+  const hasError = useMemo(() => finalLeftError || finalRightError, [finalLeftError, finalRightError]);
   
   // Debug: Log render conditions
   useEffect(() => {
@@ -759,15 +807,15 @@ export function TableComparisonView({
           <ComparisonLoadingState
             isLoading={isLoading}
             loadingStates={{
-              leftData: leftData.isLoading,
-              rightData: rightData.isLoading,
+              leftData: finalLeftIsLoading,
+              rightData: finalRightIsLoading,
               leftRelationships: leftRelationshipsData?.isLoading ?? false,
               rightRelationships: rightRelationshipsData?.isLoading ?? false,
             }}
             hasError={!!hasError}
             errors={{
-              leftData: leftData.error,
-              rightData: rightData.error,
+              leftData: finalLeftError,
+              rightData: finalRightError,
               leftRelationships: leftRelationshipsData?.error,
               rightRelationships: rightRelationshipsData?.error,
             }}
@@ -852,7 +900,9 @@ export function TableComparisonView({
                   filteredRowCount={leftTableData?.filteredRowCount}
                   limit={leftLimit}
                   onLimitChange={setLeftLimit}
-                  isLoading={leftData.isLoading}
+                  isLoading={finalLeftIsLoading}
+                  hasMore={finalLeftTableData?.hasMore}
+                  pagination={leftPagination}
                   onTableChange={onTableChange ? (schema, table) => onTableChange(leftTable.databaseName, schema, table) : undefined}
                   duplicateGroups={leftDataQuality.duplicateGroups}
                   duplicateIndexSet={leftDataQuality.duplicateIndexSet}
@@ -940,7 +990,9 @@ export function TableComparisonView({
                   filteredRowCount={rightTableData?.filteredRowCount}
                   limit={rightLimit}
                   onLimitChange={setRightLimit}
-                  isLoading={rightData.isLoading}
+                  isLoading={finalRightIsLoading}
+                  hasMore={finalRightTableData?.hasMore}
+                  pagination={rightPagination}
                   onTableChange={onTableChange ? (schema, table) => onTableChange(rightTable.databaseName, schema, table) : undefined}
                   duplicateGroups={rightDataQuality.duplicateGroups}
                   duplicateIndexSet={rightDataQuality.duplicateIndexSet}

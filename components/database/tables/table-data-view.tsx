@@ -563,6 +563,8 @@ export function TableDataView({
               hasActiveFilters={hasActiveFilters}
               duplicateIndexSet={dataQuality.duplicateIndexSet}
               nameDuplicateIndexSet={dataQuality.nameDuplicateIndexSet}
+              duplicateGroups={dataQuality.duplicateGroups}
+              nameDuplicateGroups={dataQuality.nameDuplicateGroups}
               highlightedRow={highlightedRow}
               rowRefs={rowRefs}
               debouncedFilterKey={debouncedFilterKey}

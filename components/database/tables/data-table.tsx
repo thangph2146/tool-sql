@@ -1,7 +1,7 @@
 "use client";
 
-import { useRef, useState, useMemo, useEffect } from "react";
-import { Link2, ArrowUpDown, X } from "lucide-react";
+import { useRef, useState, useMemo, useEffect, useCallback } from "react";
+import { Link2, ArrowUpDown, X, ChevronDown, ChevronRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import {
@@ -31,6 +31,7 @@ import type { ForeignKeyInfo } from "@/lib/hooks/use-database-query";
 import { useDebounce } from "@/lib/hooks/use-debounce";
 import { useFlowLoggerWithKey } from "@/lib/hooks/use-flow-logger";
 import { FLOW_NAMES } from "@/lib/constants/flow-constants";
+import type { DuplicateGroup } from "@/lib/utils/data-quality-utils";
 
 interface DataTableProps {
   columns: string[];
@@ -47,6 +48,8 @@ interface DataTableProps {
   hasActiveFilters: boolean;
   duplicateIndexSet?: Set<number>;
   nameDuplicateIndexSet?: Set<number>;
+  duplicateGroups?: DuplicateGroup[];
+  nameDuplicateGroups?: DuplicateGroup[];
   highlightedRow?: number | null;
   rowRefs?: React.MutableRefObject<Record<number, HTMLTableRowElement | null>>;
   debouncedFilterKey?: string;
@@ -69,6 +72,8 @@ export function DataTable({
   hasActiveFilters,
   duplicateIndexSet = new Set(),
   nameDuplicateIndexSet = new Set(),
+  duplicateGroups = [],
+  nameDuplicateGroups = [],
   highlightedRow = null,
   rowRefs: externalRowRefs,
   debouncedFilterKey = "",
@@ -77,6 +82,9 @@ export function DataTable({
 }: DataTableProps) {
   const internalRowRefs = useRef<Record<number, HTMLTableRowElement | null>>({});
   const rowRefs = externalRowRefs || internalRowRefs;
+
+  // State to track expanded duplicate groups
+  const [expandedDuplicateGroups, setExpandedDuplicateGroups] = useState<Set<string>>(new Set());
 
   // Flow logging
   const tableKey = `${databaseName}_${schemaName}_${tableName}`;
@@ -121,16 +129,27 @@ export function DataTable({
   };
 
   // Sort rows based on multiple sortColumns
-  const sortedRows = useMemo(() => {
+  // Also create a mapping from original index to sorted index
+  const sortedRowsData = useMemo(() => {
     if (sortColumns.length === 0) {
-      return rows;
+      // No sorting, create identity map
+      const identityMap = new Map<number, number>();
+      rows.forEach((_, index) => identityMap.set(index, index));
+      return { sortedRows: rows, originalToSortedIndexMap: identityMap };
     }
 
-    return [...rows].sort((a, b) => {
+    // Create array with original indices
+    const rowsWithIndices = rows.map((row, originalIndex) => ({
+      row,
+      originalIndex,
+    }));
+
+    // Sort with original indices preserved
+    const sorted = rowsWithIndices.sort((a, b) => {
       // Sort by each column in order
       for (const { column, order } of sortColumns) {
-        const aValue = a[column];
-        const bValue = b[column];
+        const aValue = a.row[column];
+        const bValue = b.row[column];
 
         // Handle null/undefined values
         if (aValue == null && bValue == null) continue;
@@ -180,7 +199,109 @@ export function DataTable({
       }
       return 0;
     });
+
+    // Extract sorted rows and create mapping
+    const sortedRowsResult = sorted.map(item => item.row);
+    const indexMap = new Map<number, number>();
+    sorted.forEach((item, sortedIndex) => {
+      indexMap.set(item.originalIndex, sortedIndex);
+    });
+
+    return { sortedRows: sortedRowsResult, originalToSortedIndexMap: indexMap };
   }, [rows, sortColumns]);
+
+  const sortedRows = sortedRowsData.sortedRows;
+  const originalToSortedIndexMap = sortedRowsData.originalToSortedIndexMap;
+
+  // Map duplicate indices from original to sorted
+  const duplicateRowIndices = useMemo(() => {
+    if (!duplicateIndexSet || duplicateIndexSet.size === 0) {
+      return new Set<number>();
+    }
+    const sortedIndices = new Set<number>();
+    duplicateIndexSet.forEach(originalIdx => {
+      const sortedIdx = originalToSortedIndexMap.get(originalIdx);
+      if (sortedIdx !== undefined) {
+        sortedIndices.add(sortedIdx);
+      }
+    });
+    return sortedIndices;
+  }, [duplicateIndexSet, originalToSortedIndexMap]);
+
+  const nameDuplicateRowIndices = useMemo(() => {
+    if (!nameDuplicateIndexSet || nameDuplicateIndexSet.size === 0) {
+      return new Set<number>();
+    }
+    const sortedIndices = new Set<number>();
+    nameDuplicateIndexSet.forEach(originalIdx => {
+      const sortedIdx = originalToSortedIndexMap.get(originalIdx);
+      if (sortedIdx !== undefined) {
+        sortedIndices.add(sortedIdx);
+      }
+    });
+    return sortedIndices;
+  }, [nameDuplicateIndexSet, originalToSortedIndexMap]);
+
+  // Group rows by duplicate groups for collapse/expand
+  // Map original indices to sorted indices
+  const groupedRows = useMemo(() => {
+    const groups: Map<string, { parentIndex: number; childIndices: number[] }> = new Map();
+    const processedIndices = new Set<number>();
+    
+    // Process duplicate groups - map original indices to sorted indices
+    duplicateGroups.forEach((group) => {
+      if (group.indices.length > 1) {
+        // Map original indices to sorted indices
+        const sortedIndices = group.indices
+          .map(originalIdx => originalToSortedIndexMap.get(originalIdx))
+          .filter((idx): idx is number => idx !== undefined)
+          .sort((a, b) => a - b); // Sort to ensure parent is first
+        
+        if (sortedIndices.length > 1) {
+          const parentIndex = sortedIndices[0];
+          const childIndices = sortedIndices.slice(1);
+          groups.set(group.signature, { parentIndex, childIndices });
+          sortedIndices.forEach(idx => processedIndices.add(idx));
+        }
+      }
+    });
+    
+    // Process name duplicate groups - map original indices to sorted indices
+    nameDuplicateGroups.forEach((group) => {
+      if (group.indices.length > 1) {
+        const signature = `name_${group.signature}`;
+        if (!groups.has(signature)) {
+          // Map original indices to sorted indices
+          const sortedIndices = group.indices
+            .map(originalIdx => originalToSortedIndexMap.get(originalIdx))
+            .filter((idx): idx is number => idx !== undefined)
+            .sort((a, b) => a - b); // Sort to ensure parent is first
+          
+          if (sortedIndices.length > 1) {
+            const parentIndex = sortedIndices[0];
+            const childIndices = sortedIndices.slice(1);
+            groups.set(signature, { parentIndex, childIndices });
+            sortedIndices.forEach(idx => processedIndices.add(idx));
+          }
+        }
+      }
+    });
+    
+    return { groups, processedIndices };
+  }, [duplicateGroups, nameDuplicateGroups, originalToSortedIndexMap]);
+
+  // Toggle expand/collapse for duplicate group
+  const toggleDuplicateGroup = useCallback((signature: string) => {
+    setExpandedDuplicateGroups((prev) => {
+      const next = new Set(prev);
+      if (next.has(signature)) {
+        next.delete(signature);
+      } else {
+        next.add(signature);
+      }
+      return next;
+    });
+  }, []);
 
   // Log when rows are filtered/sorted
   useEffect(() => {
@@ -414,43 +535,165 @@ export function DataTable({
       </TableHeader>
       <TableBody>
         {sortedRows.length > 0 ? (
-          sortedRows.map((row, rowIndex) => {
-            const firstColumn = columns[0];
-            const primaryOriginalId =
-              firstColumn && row[`${firstColumn}_OriginalId`];
-            const fallbackOriginalId = row["Oid_OriginalId"];
-            const uniqueKey =
-              primaryOriginalId ??
-              fallbackOriginalId ??
-              row["Id"] ??
-              row["Oid"] ??
-              (firstColumn ? row[firstColumn] : undefined) ??
-              `${rowIndex}-${debouncedFilterKey}`;
-            const isDuplicateRow = duplicateIndexSet.has(rowIndex);
-            const isNameDuplicate = nameDuplicateIndexSet.has(rowIndex);
-            const isHighlighted = highlightedRow === rowIndex;
-            return (
-              <TableRow
-                key={String(uniqueKey)}
-                ref={(el) => {
-                  rowRefs.current[rowIndex] = el;
-                }}
-                className={cn(
-                  (isDuplicateRow || isNameDuplicate) &&
-                    "ring-1 ring-amber-400 bg-amber-50/60",
-                  isHighlighted && "ring-2 ring-primary"
-                )}
-              >
-                {columns.map(
-                  (column) => (
-                    <TableCell key={column} className="max-w-xs">
-                      <TableCellComponent value={row[column]} />
-                    </TableCell>
-                  )
-                )}
-              </TableRow>
-            );
-          })
+          (() => {
+            const renderedRows: React.ReactNode[] = [];
+            const processedIndices = new Set<number>();
+            
+            sortedRows.forEach((row, rowIndex) => {
+              // Skip if already processed as child row
+              if (processedIndices.has(rowIndex)) {
+                return;
+              }
+              
+              const firstColumn = columns[0];
+              const primaryOriginalId =
+                firstColumn && row[`${firstColumn}_OriginalId`];
+              const fallbackOriginalId = row["Oid_OriginalId"];
+              const uniqueKey =
+                primaryOriginalId ??
+                fallbackOriginalId ??
+                row["Id"] ??
+                row["Oid"] ??
+                (firstColumn ? row[firstColumn] : undefined) ??
+                `${rowIndex}-${debouncedFilterKey}`;
+              const isDuplicateRow = duplicateRowIndices.has(rowIndex);
+              const isNameDuplicate = nameDuplicateRowIndices.has(rowIndex);
+              const isHighlighted = highlightedRow === rowIndex;
+
+              // Check if this row is a parent of a duplicate group
+              let duplicateGroupInfo: { signature: string; childIndices: number[] } | null = null;
+              for (const [signature, group] of groupedRows.groups.entries()) {
+                if (group.parentIndex === rowIndex) {
+                  duplicateGroupInfo = { signature, childIndices: group.childIndices };
+                  break;
+                }
+              }
+              
+              const isExpanded = duplicateGroupInfo ? expandedDuplicateGroups.has(duplicateGroupInfo.signature) : false;
+              const childCount = duplicateGroupInfo ? duplicateGroupInfo.childIndices.length : 0;
+              
+              const uniqueRowKey = `${String(uniqueKey)}-${rowIndex}`;
+              
+              // Render parent row
+              renderedRows.push(
+                <TableRow
+                  key={uniqueRowKey}
+                  ref={(el) => {
+                    rowRefs.current[rowIndex] = el;
+                  }}
+                  className={cn(
+                    (isDuplicateRow || isNameDuplicate) &&
+                      "ring-1 ring-amber-400 bg-amber-50/60",
+                    isHighlighted && "ring-2 ring-primary"
+                  )}
+                >
+                  {columns.map((column, colIndex) => {
+                    const isFirstColumn = colIndex === 0;
+                    const showExpandButton = isFirstColumn && duplicateGroupInfo && childCount > 0;
+                    
+                    return (
+                      <TableCell key={column} className="max-w-xs">
+                        <div className="flex items-center gap-1">
+                          {showExpandButton && (
+                            <Button
+                              variant="ghost"
+                              size="icon-sm"
+                              className="h-4 w-4 p-0"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                if (duplicateGroupInfo) {
+                                  toggleDuplicateGroup(duplicateGroupInfo.signature);
+                                }
+                              }}
+                              type="button"
+                            >
+                              {isExpanded ? (
+                                <ChevronDown className="h-3 w-3" />
+                              ) : (
+                                <ChevronRight className="h-3 w-3" />
+                              )}
+                            </Button>
+                          )}
+                          {showExpandButton && !isExpanded && (
+                            <Badge variant="secondary" className="text-xs px-1 py-0 h-4">
+                              +{childCount}
+                            </Badge>
+                          )}
+                          <TableCellComponent value={row[column]} />
+                        </div>
+                      </TableCell>
+                    );
+                  })}
+                </TableRow>
+              );
+              
+              // Mark parent as processed
+              processedIndices.add(rowIndex);
+              
+              // If collapsed, mark all child indices as processed to skip them
+              if (duplicateGroupInfo && !isExpanded) {
+                duplicateGroupInfo.childIndices.forEach((childIndex) => {
+                  processedIndices.add(childIndex);
+                });
+              }
+              
+              // Render child rows if expanded
+              if (duplicateGroupInfo && isExpanded) {
+                duplicateGroupInfo.childIndices.forEach((childIndex) => {
+                  if (childIndex < sortedRows.length) {
+                    const childRow = sortedRows[childIndex];
+                    const childFirstColumn = columns[0];
+                    const childPrimaryOriginalId =
+                      childFirstColumn && childRow[`${childFirstColumn}_OriginalId`];
+                    const childFallbackOriginalId = childRow["Oid_OriginalId"];
+                    const childUniqueKey =
+                      childPrimaryOriginalId ??
+                      childFallbackOriginalId ??
+                      childRow["Id"] ??
+                      childRow["Oid"] ??
+                      (childFirstColumn ? childRow[childFirstColumn] : undefined) ??
+                      `${childIndex}-${debouncedFilterKey}`;
+                    const childIsDuplicateRow = duplicateRowIndices.has(childIndex);
+                    const childIsNameDuplicate = nameDuplicateRowIndices.has(childIndex);
+                    const childIsHighlighted = highlightedRow === childIndex;
+                    
+                    const childUniqueRowKey = `${String(childUniqueKey)}-${childIndex}`;
+                    
+                    renderedRows.push(
+                      <TableRow
+                        key={childUniqueRowKey}
+                        ref={(el) => {
+                          rowRefs.current[childIndex] = el;
+                        }}
+                        className={cn(
+                          "bg-muted/30",
+                          (childIsDuplicateRow || childIsNameDuplicate) &&
+                            "ring-1 ring-amber-400 bg-amber-50/80",
+                          childIsHighlighted && "ring-2 ring-primary"
+                        )}
+                      >
+                        {columns.map((column, colIndex) => (
+                          <TableCell
+                            key={column}
+                            className={cn(
+                              "max-w-xs",
+                              colIndex === 0 && "pl-8"
+                            )}
+                          >
+                            <TableCellComponent value={childRow[column]} />
+                          </TableCell>
+                        ))}
+                      </TableRow>
+                    );
+                    
+                    processedIndices.add(childIndex);
+                  }
+                });
+              }
+            });
+            
+            return renderedRows;
+          })()
         ) : (
           <TableRow>
             <TableCell

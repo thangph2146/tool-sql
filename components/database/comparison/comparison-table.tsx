@@ -2,7 +2,7 @@
 
 import { useMemo, useRef, useState, useCallback, useEffect } from "react";
 import { useDebounce } from "@/lib/hooks/use-debounce";
-import { Database, Filter, XCircle, Link2, Loader2, ArrowUpDown, X, ChevronDown, ChevronRight } from "lucide-react";
+import { Database, Filter, XCircle, Link2, Loader2, ArrowUpDown, X, ChevronDown, ChevronRight, ChevronLeft, ChevronsLeft, ChevronsRight } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Table, TableHeader, TableBody, TableHead, TableRow, TableCell } from "@/components/ui/table";
@@ -14,6 +14,8 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
+import { Input } from "@/components/ui/input";
+import { Field, FieldContent, FieldLabel } from "@/components/ui/field";
 import { TableCell as TableCellComponent } from "../tables/table-cell";
 import { cn } from "@/lib/utils";
 import type { UseTableFiltersReturn } from "@/lib/hooks/use-table-filters";
@@ -58,6 +60,23 @@ interface ComparisonTableProps {
   limit?: number;
   onLimitChange?: (limit: number) => void;
   isLoading?: boolean;
+  hasMore?: boolean;
+  pagination?: {
+    page: number;
+    setPage: (page: number) => void;
+    pageInput: string;
+    offset: number;
+    currentPage: number;
+    totalPages: number;
+    handlePrevious: () => void;
+    handleNext: () => void;
+    handleFirstPage: () => void;
+    handleLastPage: () => void;
+    handlePageInputChange: (value: string) => void;
+    handlePageInputSubmit: () => void;
+    handlePageInputKeyDown: (e: React.KeyboardEvent<HTMLInputElement>) => void;
+    handleLimitChange: (e: React.ChangeEvent<HTMLSelectElement>) => void;
+  };
   onTableChange?: (schema: string, table: string) => void;
   duplicateGroups?: DuplicateGroup[];
   duplicateIndexSet?: Set<number>;
@@ -89,6 +108,8 @@ export function ComparisonTable({
   limit,
   onLimitChange,
   isLoading = false,
+  hasMore,
+  pagination,
   onTableChange,
   duplicateGroups = [],
   duplicateIndexSet,
@@ -1068,6 +1089,89 @@ export function ComparisonTable({
           </TableBody>
         </Table>
       </div>
+      {/* Pagination */}
+      {pagination && totalRows !== undefined && (
+        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4 p-4 border-t border-border">
+          <div className="flex items-center gap-4 flex-wrap">
+            <div className="text-xs text-muted-foreground">
+              {filters.hasActiveFilters ? (
+                <>
+                  Showing {filteredRowCount ?? rows.length} of {totalRows} rows
+                  {(filteredRowCount ?? rows.length) !== totalRows && (
+                    <span className="text-primary"> (filtered)</span>
+                  )}
+                  <span className="ml-1">
+                    ({columns.length} columns)
+                  </span>
+                </>
+              ) : (
+                <>
+                  Showing {pagination.offset + 1} -{" "}
+                  {Math.min(pagination.offset + (limit ?? 0), totalRows)} of{" "}
+                  {totalRows} rows ({columns.length} columns)
+                </>
+              )}
+            </div>
+           
+          </div>
+          <div className="flex items-center gap-2 flex-wrap">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={pagination.handleFirstPage}
+              disabled={pagination.page === 0}
+              title="First page"
+            >
+              <ChevronsLeft className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={pagination.handlePrevious}
+              disabled={pagination.page === 0}
+            >
+              <ChevronLeft className="h-4 w-4" />
+              <span className="hidden sm:inline">Previous</span>
+            </Button>
+            <div className="flex items-center gap-2">
+              <span className="text-xs text-muted-foreground">Page</span>
+              <Input
+                type="number"
+                min={1}
+                max={pagination.totalPages || 1}
+                value={pagination.pageInput}
+                onChange={(e) =>
+                  pagination.handlePageInputChange(e.target.value)
+                }
+                onBlur={pagination.handlePageInputSubmit}
+                onKeyDown={pagination.handlePageInputKeyDown}
+                className="h-8 w-16 text-center text-xs"
+              />
+              <span className="text-xs text-muted-foreground">
+                of {pagination.totalPages || 1}
+              </span>
+            </div>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={pagination.handleNext}
+              disabled={hasMore === false || pagination.page >= pagination.totalPages - 1}
+            >
+              <span className="hidden sm:inline">Next</span>
+              <ChevronRight className="h-4 w-4" />
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={pagination.handleLastPage}
+              disabled={hasMore === false || pagination.page >= pagination.totalPages - 1}
+              title="Last page"
+            >
+              <ChevronsRight className="h-4 w-4" />
+            </Button>
+          </div>
+        </div>
+      )}
     </div>
   );
 }
