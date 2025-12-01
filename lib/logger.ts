@@ -78,7 +78,12 @@ class Logger {
   logFlowStep(flowId: string, message: string, data?: unknown, level: LogLevel = 'info'): void {
     const flow = this.flows.get(flowId);
     if (!flow) {
-      this.warn(`Flow ${flowId} not found, logging without flow context`, undefined, 'FLOW');
+      // Flow đã kết thúc (có thể do component unmount hoặc key thay đổi)
+      // Đây là tình huống bình thường, chỉ log thông thường mà không cảnh báo
+      // để tránh spam logs với cảnh báo không cần thiết
+      if (this.isDevelopment) {
+        this.debug(`Flow ${flowId} not found (likely ended), logging without flow context`, undefined, 'FLOW');
+      }
       this.log(level, message, data);
       return;
     }

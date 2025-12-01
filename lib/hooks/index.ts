@@ -1,0 +1,24 @@
+/**
+ * Centralized hooks exports
+ * Export all hooks from here for consistency
+ * 
+ * Note: Legacy hooks (use-database-query) are not exported here to avoid conflicts.
+ * Import directly from '@/lib/hooks/use-database-query' if you need legacy hooks.
+ * TODO: Migrate all components to use new hooks from './queries'
+ */
+
+// Query hooks (new architecture) - Preferred
+export * from './queries';
+
+// Other hooks
+export * from './use-debounce';
+export * from './use-flow-logger';
+export * from './use-synced-columns';
+export * from './use-table-comparison';
+export * from './use-table-filters';
+export * from './use-table-pagination';
+export * from './use-column-filter-options';
+
+// Export types from legacy hooks (only exported types)
+export type { ForeignKeyInfo } from './use-database-query';
+
