@@ -23,7 +23,30 @@ function normalizeValue(value: unknown): string {
     return "∅";
   }
   if (typeof value === "string") {
-    return value.trim().toLowerCase();
+    // Remove display ID patterns like "\n(ID: ...)" or "(ID: ...)"
+    let cleaned = value;
+    const idPattern = /\n\(ID:\s*[^)]+\)/;
+    if (idPattern.test(cleaned)) {
+      cleaned = cleaned.split('\n(ID:')[0].trim();
+    }
+    const idPatternEnd = /\(ID:\s*[^)]+\)$/;
+    if (idPatternEnd.test(cleaned)) {
+      cleaned = cleaned.replace(idPatternEnd, '').trim();
+    }
+    // Trim and normalize whitespace (replace multiple spaces with single space)
+    cleaned = cleaned.trim().replace(/\s+/g, ' ');
+    // For numeric strings, preserve leading zeros and exact value
+    // Don't convert to lowercase for numeric strings to preserve exact comparison
+    // Only lowercase for non-numeric strings
+    const trimmed = cleaned.trim();
+    if (trimmed.length === 0) {
+      return "∅";
+    }
+    // Check if it's a pure numeric string (all digits, possibly with leading zeros)
+    if (/^\d+$/.test(trimmed)) {
+      return trimmed; // Preserve exact numeric string value (including leading zeros)
+    }
+    return trimmed.toLowerCase();
   }
   if (typeof value === "number" || typeof value === "boolean") {
     return String(value);

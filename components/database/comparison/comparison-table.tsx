@@ -86,6 +86,9 @@ interface ComparisonTableProps {
   combinedColumns?: CombinedColumn[];
   columnsToCompare?: string[];
   flowLog?: FlowLogger | null;
+  joinedDataMap?: Map<string, Record<string, unknown>>; // For joining columns from other table (deprecated, use allJoinedDataMaps)
+  allJoinedDataMaps?: Map<string, Map<string, Record<string, unknown>>>; // Map of table keys to their joinedDataMap
+  currentTableInfo?: { schemaName: string; tableName: string }; // For determining which joinedDataMap to use
 }
 
 export function ComparisonTable({
@@ -119,6 +122,9 @@ export function ComparisonTable({
   combinedColumns = [],
   columnsToCompare = [],
   flowLog,
+  joinedDataMap,
+  allJoinedDataMaps,
+  currentTableInfo,
 }: ComparisonTableProps) {
   // Sort state - array of {column, order}
   type SortConfig = { column: string; order: "alphabetical" | "reverse" | "newest" | "oldest" };
@@ -182,8 +188,8 @@ export function ComparisonTable({
       // Sort by each column in order
       for (const { column, order } of sortColumns) {
         // Handle combined columns
-        const aValue = getColumnValue(a.row, column, combinedColumns);
-        const bValue = getColumnValue(b.row, column, combinedColumns);
+        const aValue = getColumnValue(a.row, column, combinedColumns, joinedDataMap, allJoinedDataMaps, currentTableInfo);
+        const bValue = getColumnValue(b.row, column, combinedColumns, joinedDataMap, allJoinedDataMaps, currentTableInfo);
 
         // Handle null/undefined values
         if (aValue == null && bValue == null) continue;
@@ -242,7 +248,7 @@ export function ComparisonTable({
     });
 
     return { sortedRows: sortedRowsResult, originalToSortedIndexMap: indexMap };
-  }, [rows, sortColumns, combinedColumns, columnsToCompare.length]);
+  }, [rows, sortColumns, combinedColumns, columnsToCompare.length, joinedDataMap]);
 
   const sortedRows = sortedRowsData.sortedRows;
   const originalToSortedIndexMap = sortedRowsData.originalToSortedIndexMap;
@@ -374,7 +380,7 @@ export function ComparisonTable({
       // Extract unique actual values from rows
       const uniqueValues = new Set<string>();
       rows.forEach(row => {
-        const cellValue = getColumnValue(row, columnName, combinedColumns);
+        const cellValue = getColumnValue(row, columnName, combinedColumns, joinedDataMap, allJoinedDataMaps, currentTableInfo);
         const actualValue = extractActualValue(cellValue);
         // Only add string values to filter options (skip objects/Buffers)
         if (typeof actualValue === "string" && actualValue.trim()) {
@@ -702,7 +708,7 @@ export function ComparisonTable({
             <TableRow>
               {/* STT column header */}
               {!isLoading || columns.length > 0 ? (
-                <TableHead className="font-semibold p-2 text-xs w-[100px] min-w-[100px] max-w-[100px] sticky left-0 bg-background z-10 border-r">
+                <TableHead className="font-semibold p-2 text-xs w-[100px] min-w-[100px] max-w-[100px] sticky top-0 left-0 bg-background z-11 border-r">
                   <div className="flex items-center justify-center gap-1">
                     <span>STT</span>
                   </div>
@@ -924,7 +930,7 @@ export function ComparisonTable({
                         // Check if this is a combined column
                         const combined = combinedColumns.find(c => c.name === column);
                         const rawValue = combined 
-                          ? getColumnValue(row, column, combinedColumns)
+                          ? getColumnValue(row, column, combinedColumns, joinedDataMap, allJoinedDataMaps, currentTableInfo)
                           : row[column];
                         
                         // Extract actual value from display value for display
@@ -1074,7 +1080,7 @@ export function ComparisonTable({
                               const isDiffColumn = childDiff?.diffColumns?.includes(column);
                               const combined = combinedColumns.find(c => c.name === column);
                               const rawValue = combined 
-                                ? getColumnValue(childRow, column, combinedColumns)
+                                ? getColumnValue(childRow, column, combinedColumns, joinedDataMap, allJoinedDataMaps, currentTableInfo)
                                 : childRow[column];
                               const cellValue = extractActualValue(rawValue);
                               const isColumnCompared = columnsToCompare.length > 0 && columnsToCompare.includes(column);

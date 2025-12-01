@@ -559,35 +559,444 @@ export function TableComparisonView({
     return commonDisplayed;
   }, [leftColumnsToDisplay, rightColumnsToDisplay]);
 
+  // Create joined data maps for joining columns from other table
+  // Store all rows - will be searched by PK_COLUMN value in getColumnValue
+  const rightJoinedDataMap = useMemo(() => {
+    if (!rightTableData?.rows) return new Map<string, Record<string, unknown>>();
+    const map = new Map<string, Record<string, unknown>>();
+    // Store rows with multiple keys (one for each potential PK column)
+    // This allows lookup by any PK_COLUMN value
+    rightTableData.rows.forEach(row => {
+      // Store with Oid as primary key
+      const oidKey = String(row["Oid"] ?? "");
+      if (oidKey) {
+        map.set(oidKey, row);
+      }
+      // Also store with other common key columns
+      Object.keys(row).forEach(col => {
+        const value = row[col];
+        if (value !== null && value !== undefined && value !== "") {
+          const key = `${col}:${String(value).trim()}`;
+          if (!map.has(key)) {
+            map.set(key, row);
+          }
+        }
+      });
+    });
+    return map;
+  }, [rightTableData?.rows]);
+
+  const leftJoinedDataMap = useMemo(() => {
+    if (!leftTableData?.rows) return new Map<string, Record<string, unknown>>();
+    const map = new Map<string, Record<string, unknown>>();
+    // Store rows with multiple keys (one for each potential PK column)
+    leftTableData.rows.forEach(row => {
+      // Store with Oid as primary key
+      const oidKey = String(row["Oid"] ?? "");
+      if (oidKey) {
+        map.set(oidKey, row);
+      }
+      // Also store with other common key columns
+      Object.keys(row).forEach(col => {
+        const value = row[col];
+        if (value !== null && value !== undefined && value !== "") {
+          const key = `${col}:${String(value).trim()}`;
+          if (!map.has(key)) {
+            map.set(key, row);
+          }
+        }
+      });
+    });
+    return map;
+  }, [leftTableData?.rows]);
+
+  // Helper function to create joinedDataMap from table data
+  const createJoinedDataMap = (rows: Record<string, unknown>[]): Map<string, Record<string, unknown>> => {
+    const map = new Map<string, Record<string, unknown>>();
+    rows.forEach(row => {
+      // Store with Oid as primary key
+      const oidKey = String(row["Oid"] ?? "");
+      if (oidKey) {
+        map.set(oidKey, row);
+      }
+      // Also store with other common key columns
+      Object.keys(row).forEach(col => {
+        const value = row[col];
+        if (value !== null && value !== undefined && value !== "") {
+          const key = `${col}:${String(value).trim()}`;
+          if (!map.has(key)) {
+            map.set(key, row);
+          }
+        }
+      });
+    });
+    return map;
+  };
+
+  // Get all unique tables that are being joined (from combinedColumns)
+  const joinedTables = useMemo(() => {
+    const tables = new Map<string, { schema: string; table: string; database: DatabaseName }>();
+    
+    validatedCombinedColumns.forEach(combined => {
+      if (combined.joinTable) {
+        const rel = combined.joinTable.relationship;
+        // Determine which table is being joined
+        const currentTableIsFK = (combined.side === "left" && rel.FK_SCHEMA === leftTable.schemaName && rel.FK_TABLE === leftTable.tableName) ||
+                                 (combined.side === "right" && rel.FK_SCHEMA === rightTable.schemaName && rel.FK_TABLE === rightTable.tableName);
+        
+        if (currentTableIsFK) {
+          // Join from PK table
+          const key = `${rel.PK_SCHEMA}.${rel.PK_TABLE}`;
+          if (!tables.has(key)) {
+            tables.set(key, {
+              schema: rel.PK_SCHEMA,
+              table: rel.PK_TABLE,
+              database: combined.side === "left" ? leftTable.databaseName : rightTable.databaseName,
+            });
+          }
+        } else {
+          // Join from FK table
+          const key = `${rel.FK_SCHEMA}.${rel.FK_TABLE}`;
+          if (!tables.has(key)) {
+            tables.set(key, {
+              schema: rel.FK_SCHEMA,
+              table: rel.FK_TABLE,
+              database: combined.side === "left" ? leftTable.databaseName : rightTable.databaseName,
+            });
+          }
+        }
+      }
+    });
+    
+    const result = Array.from(tables.values());
+    
+    // Log for debugging
+    if (flowLog && validatedCombinedColumns.some(c => c.joinTable)) {
+      flowLog.debug('Joined tables identified', {
+        totalJoinedColumns: validatedCombinedColumns.filter(c => c.joinTable).length,
+        joinedTables: result.map(t => `${t.schema}.${t.table}`),
+        leftTable: `${leftTable.schemaName}.${leftTable.tableName}`,
+        rightTable: `${rightTable.schemaName}.${rightTable.tableName}`,
+      });
+    }
+    
+    return result;
+  }, [validatedCombinedColumns, leftTable, rightTable, flowLog]);
+
+  // Fetch data for all joined tables (that are not left/right tables)
+  const joinedTablesToFetch = useMemo(() => {
+    const filtered = joinedTables.filter(tableInfo => {
+      const isLeftTable = tableInfo.schema === leftTable.schemaName && tableInfo.table === leftTable.tableName;
+      const isRightTable = tableInfo.schema === rightTable.schemaName && tableInfo.table === rightTable.tableName;
+      return !isLeftTable && !isRightTable;
+    });
+    
+    // Log for debugging
+    if (flowLog && filtered.length > 0) {
+      flowLog.debug('Joined tables to fetch', {
+        total: filtered.length,
+        tables: filtered.map(t => `${t.schema}.${t.table} (${t.database})`),
+      });
+    }
+    
+    return filtered;
+  }, [joinedTables, leftTable, rightTable, flowLog]);
+
+  // Fetch data for the first joined table (support only one for now due to React hooks rules)
+  const firstJoinedTable = joinedTablesToFetch[0];
+  
+  // Log for debugging
+  useEffect(() => {
+    if (flowLog && firstJoinedTable) {
+      flowLog.debug('Fetching joined table data', {
+        schema: firstJoinedTable.schema,
+        table: firstJoinedTable.table,
+        database: firstJoinedTable.database,
+        open,
+        shouldFetch: open && !!firstJoinedTable,
+      });
+    }
+  }, [firstJoinedTable, open, flowLog]);
+  
+  // Fetch rows from joined table - use max of leftLimit and rightLimit to ensure we have enough data
+  // This ensures the joined table fetch limit is synchronized with the main table limits
+  const joinedTableFetchLimit = useMemo(() => {
+    return Math.max(leftLimit, rightLimit, 100); // At least 100, but use max of both limits
+  }, [leftLimit, rightLimit]);
+  
+  const joinedTableData = useTableData(
+    firstJoinedTable?.database,
+    firstJoinedTable?.schema,
+    firstJoinedTable?.table,
+    joinedTableFetchLimit,
+    0,
+    open && !!firstJoinedTable,
+    false
+  );
+  
+  // Log fetch result
+  useEffect(() => {
+    if (flowLog && firstJoinedTable) {
+      if (joinedTableData?.data?.data?.rows) {
+        flowLog.debug('Joined table data fetched successfully', {
+          schema: firstJoinedTable.schema,
+          table: firstJoinedTable.table,
+          rowsCount: joinedTableData.data.data.rows.length,
+          totalRows: joinedTableData.data.data.totalRows,
+        });
+      } else if (joinedTableData && !joinedTableData.data?.data?.rows) {
+        flowLog.debug('Joined table data fetch returned no rows', {
+          schema: firstJoinedTable.schema,
+          table: firstJoinedTable.table,
+          response: joinedTableData,
+        });
+      }
+    }
+  }, [joinedTableData, firstJoinedTable, flowLog]);
+
+  // Create a map of table keys to their joinedDataMap
+  const allJoinedDataMaps = useMemo(() => {
+    const maps = new Map<string, Map<string, Record<string, unknown>>>();
+    
+    // Add left and right table maps
+    maps.set(`${leftTable.schemaName}.${leftTable.tableName}`, leftJoinedDataMap);
+    maps.set(`${rightTable.schemaName}.${rightTable.tableName}`, rightJoinedDataMap);
+    
+    // Add joined table maps
+    if (firstJoinedTable && joinedTableData?.data?.data?.rows) {
+      const tableKey = `${firstJoinedTable.schema}.${firstJoinedTable.table}`;
+      const joinedMap = createJoinedDataMap(joinedTableData.data.data.rows);
+      maps.set(tableKey, joinedMap);
+      
+      // Log for debugging
+      if (flowLog) {
+        flowLog.debug('Joined table data loaded', {
+          tableKey,
+          schema: firstJoinedTable.schema,
+          table: firstJoinedTable.table,
+          rowsCount: joinedTableData.data.data.rows.length,
+          joinedMapSize: joinedMap.size,
+          sampleKeys: Array.from(joinedMap.keys()).slice(0, 5),
+        });
+      }
+    }
+    
+    // Log all available joined data maps
+    if (flowLog && maps.size > 0) {
+      flowLog.debug('All joined data maps', {
+        totalMaps: maps.size,
+        mapKeys: Array.from(maps.keys()),
+        mapSizes: Array.from(maps.entries()).map(([key, map]) => ({ key, size: map.size })),
+      });
+    }
+    
+    return maps;
+  }, [leftJoinedDataMap, rightJoinedDataMap, leftTable, rightTable, firstJoinedTable, joinedTableData, flowLog]);
+
+
   // Process rows to include combined column values and synchronize row count
   // Use the table with more rows as the base, and pad the other table with null rows
   const leftRowsWithCombined = useMemo(() => {
     if (!leftTableData?.rows) return [];
-    const processedRows = leftTableData.rows.map(row => {
+    const processedRows = leftTableData.rows.map((row, rowIndex) => {
       const newRow = { ...row };
       validatedCombinedColumns
         .filter(c => c.side === "left")
         .forEach(combined => {
-          newRow[combined.name] = getColumnValue(row, combined.name, validatedCombinedColumns);
+          const value = getColumnValue(row, combined.name, validatedCombinedColumns, undefined, allJoinedDataMaps, { schemaName: leftTable.schemaName, tableName: leftTable.tableName });
+          newRow[combined.name] = value;
+          
+          // Log for debugging (only for first row to avoid spam)
+          if (flowLog && combined.joinTable && value === null && rowIndex === 0) {
+            const rel = combined.joinTable.relationship;
+            const currentTableIsFK = rel.FK_SCHEMA === leftTable.schemaName && rel.FK_TABLE === leftTable.tableName;
+            const currentTableIsPK = rel.PK_SCHEMA === leftTable.schemaName && rel.PK_TABLE === leftTable.tableName;
+            const joinedTableKey = currentTableIsFK 
+              ? `${rel.PK_SCHEMA}.${rel.PK_TABLE}`
+              : currentTableIsPK
+              ? `${rel.FK_SCHEMA}.${rel.FK_TABLE}`
+              : `${rel.PK_SCHEMA}.${rel.PK_TABLE}`;
+            const joinKey = currentTableIsFK ? row[rel.FK_COLUMN] : (currentTableIsPK ? row[rel.PK_COLUMN] : null);
+            const availableKeys = Array.from(allJoinedDataMaps.keys());
+            const joinedDataMap = allJoinedDataMaps.get(joinedTableKey);
+            const targetColumn = currentTableIsFK ? rel.PK_COLUMN : (currentTableIsPK ? rel.FK_COLUMN : rel.PK_COLUMN);
+            // Extract Oid from display value if needed
+            const extractedOid = joinKey !== null && joinKey !== undefined && typeof joinKey === 'string' && joinKey.includes('(ID:') 
+              ? joinKey.match(/\(ID:\s*([^)]+)\)/)?.[1]?.trim() 
+              : joinKey;
+            const normalizedKey = extractedOid !== null && extractedOid !== undefined ? String(extractedOid).trim() : null;
+            const originalKey = joinKey !== null && joinKey !== undefined ? String(joinKey).trim() : null;
+            const targetColumnKey = normalizedKey ? `${targetColumn}:${normalizedKey}` : null;
+            const originalTargetColumnKey = originalKey && originalKey !== normalizedKey ? `${targetColumn}:${originalKey}` : null;
+            
+            // Get sample keys from joinedDataMap for debugging
+            const sampleMapKeys = joinedDataMap ? Array.from(joinedDataMap.keys()).slice(0, 10) : [];
+            const hasTargetColumnKey = targetColumnKey && joinedDataMap ? joinedDataMap.has(targetColumnKey) : false;
+            const hasNormalizedKey = normalizedKey && joinedDataMap ? joinedDataMap.has(normalizedKey) : false;
+            const hasOriginalTargetColumnKey = originalTargetColumnKey && joinedDataMap ? joinedDataMap.has(originalTargetColumnKey) : false;
+            const hasOriginalKey = originalKey && joinedDataMap ? joinedDataMap.has(originalKey) : false;
+            
+            // Check if any row has matching targetColumn value
+            let matchingRowSample = null;
+            if (joinedDataMap && normalizedKey) {
+              const matchingRow = Array.from(joinedDataMap.values()).find(
+                (r) => {
+                  const targetValue = r[targetColumn];
+                  if (targetValue === null || targetValue === undefined) return false;
+                  const normalizedTarget = String(targetValue).trim();
+                  return normalizedTarget === normalizedKey || String(targetValue) === String(joinKey) || targetValue === joinKey;
+                }
+              );
+              if (matchingRow) {
+                matchingRowSample = {
+                  hasJoinColumn: combined.joinTable.joinColumn in matchingRow,
+                  joinColumnValue: matchingRow[combined.joinTable.joinColumn],
+                  targetColumnValue: matchingRow[targetColumn],
+                  sampleKeys: Object.keys(matchingRow).slice(0, 5),
+                };
+              }
+            }
+            
+            flowLog.debug('Left joined column value lookup (first row)', {
+              columnName: combined.name,
+              relationship: {
+                FK: `${rel.FK_SCHEMA}.${rel.FK_TABLE}.${rel.FK_COLUMN}`,
+                PK: `${rel.PK_SCHEMA}.${rel.PK_TABLE}.${rel.PK_COLUMN}`,
+              },
+              currentTable: `${leftTable.schemaName}.${leftTable.tableName}`,
+              currentTableIsFK,
+              currentTableIsPK,
+              joinedTableKey,
+              hasJoinedDataMap: !!joinedDataMap,
+              joinedDataMapSize: joinedDataMap?.size || 0,
+              availableKeys,
+              joinKey,
+              joinKeyType: typeof joinKey,
+              extractedOid,
+              normalizedKey,
+              originalKey,
+              targetColumn,
+              targetColumnKey,
+              originalTargetColumnKey,
+              hasTargetColumnKey,
+              hasNormalizedKey,
+              hasOriginalTargetColumnKey,
+              hasOriginalKey,
+              joinColumn: combined.joinTable.joinColumn,
+              rowHasFKColumn: rel.FK_COLUMN in row,
+              rowHasPKColumn: rel.PK_COLUMN in row,
+              fkValue: row[rel.FK_COLUMN],
+              pkValue: row[rel.PK_COLUMN],
+              sampleMapKeys,
+              matchingRowSample,
+            });
+          }
         });
       return newRow;
     });
     return processedRows;
-  }, [leftTableData, validatedCombinedColumns]);
+  }, [leftTableData, validatedCombinedColumns, allJoinedDataMaps, leftTable.schemaName, leftTable.tableName, flowLog]);
 
   const rightRowsWithCombined = useMemo(() => {
     if (!rightTableData?.rows) return [];
-    const processedRows = rightTableData.rows.map(row => {
+    const processedRows = rightTableData.rows.map((row, rowIndex) => {
       const newRow = { ...row };
       validatedCombinedColumns
         .filter(c => c.side === "right")
         .forEach(combined => {
-          newRow[combined.name] = getColumnValue(row, combined.name, validatedCombinedColumns);
+          const value = getColumnValue(row, combined.name, validatedCombinedColumns, undefined, allJoinedDataMaps, { schemaName: rightTable.schemaName, tableName: rightTable.tableName });
+          newRow[combined.name] = value;
+          
+          // Log for debugging (only for first row to avoid spam)
+          if (flowLog && combined.joinTable && value === null && rowIndex === 0) {
+            const rel = combined.joinTable.relationship;
+            const currentTableIsFK = rel.FK_SCHEMA === rightTable.schemaName && rel.FK_TABLE === rightTable.tableName;
+            const currentTableIsPK = rel.PK_SCHEMA === rightTable.schemaName && rel.PK_TABLE === rightTable.tableName;
+            const joinedTableKey = currentTableIsFK 
+              ? `${rel.PK_SCHEMA}.${rel.PK_TABLE}`
+              : currentTableIsPK
+              ? `${rel.FK_SCHEMA}.${rel.FK_TABLE}`
+              : `${rel.PK_SCHEMA}.${rel.PK_TABLE}`;
+            const joinKey = currentTableIsFK ? row[rel.FK_COLUMN] : (currentTableIsPK ? row[rel.PK_COLUMN] : null);
+            const availableKeys = Array.from(allJoinedDataMaps.keys());
+            const joinedDataMap = allJoinedDataMaps.get(joinedTableKey);
+            const targetColumn = currentTableIsFK ? rel.PK_COLUMN : (currentTableIsPK ? rel.FK_COLUMN : rel.PK_COLUMN);
+            // Extract Oid from display value if needed
+            const extractedOid = joinKey !== null && joinKey !== undefined && typeof joinKey === 'string' && joinKey.includes('(ID:') 
+              ? joinKey.match(/\(ID:\s*([^)]+)\)/)?.[1]?.trim() 
+              : joinKey;
+            const normalizedKey = extractedOid !== null && extractedOid !== undefined ? String(extractedOid).trim() : null;
+            const originalKey = joinKey !== null && joinKey !== undefined ? String(joinKey).trim() : null;
+            const targetColumnKey = normalizedKey ? `${targetColumn}:${normalizedKey}` : null;
+            const originalTargetColumnKey = originalKey && originalKey !== normalizedKey ? `${targetColumn}:${originalKey}` : null;
+            
+            // Get sample keys from joinedDataMap for debugging
+            const sampleMapKeys = joinedDataMap ? Array.from(joinedDataMap.keys()).slice(0, 10) : [];
+            const hasTargetColumnKey = targetColumnKey && joinedDataMap ? joinedDataMap.has(targetColumnKey) : false;
+            const hasNormalizedKey = normalizedKey && joinedDataMap ? joinedDataMap.has(normalizedKey) : false;
+            const hasOriginalTargetColumnKey = originalTargetColumnKey && joinedDataMap ? joinedDataMap.has(originalTargetColumnKey) : false;
+            const hasOriginalKey = originalKey && joinedDataMap ? joinedDataMap.has(originalKey) : false;
+            
+            // Check if any row has matching targetColumn value
+            let matchingRowSample = null;
+            if (joinedDataMap && normalizedKey) {
+              const matchingRow = Array.from(joinedDataMap.values()).find(
+                (r) => {
+                  const targetValue = r[targetColumn];
+                  if (targetValue === null || targetValue === undefined) return false;
+                  const normalizedTarget = String(targetValue).trim();
+                  return normalizedTarget === normalizedKey || String(targetValue) === String(joinKey) || targetValue === joinKey;
+                }
+              );
+              if (matchingRow) {
+                matchingRowSample = {
+                  hasJoinColumn: combined.joinTable.joinColumn in matchingRow,
+                  joinColumnValue: matchingRow[combined.joinTable.joinColumn],
+                  targetColumnValue: matchingRow[targetColumn],
+                  sampleKeys: Object.keys(matchingRow).slice(0, 5),
+                };
+              }
+            }
+            
+            flowLog.debug('Right joined column value lookup (first row)', {
+              columnName: combined.name,
+              relationship: {
+                FK: `${rel.FK_SCHEMA}.${rel.FK_TABLE}.${rel.FK_COLUMN}`,
+                PK: `${rel.PK_SCHEMA}.${rel.PK_TABLE}.${rel.PK_COLUMN}`,
+              },
+              currentTable: `${rightTable.schemaName}.${rightTable.tableName}`,
+              currentTableIsFK,
+              currentTableIsPK,
+              joinedTableKey,
+              hasJoinedDataMap: !!joinedDataMap,
+              joinedDataMapSize: joinedDataMap?.size || 0,
+              availableKeys,
+              joinKey,
+              joinKeyType: typeof joinKey,
+              extractedOid,
+              normalizedKey,
+              originalKey,
+              targetColumn,
+              targetColumnKey,
+              originalTargetColumnKey,
+              hasTargetColumnKey,
+              hasNormalizedKey,
+              hasOriginalTargetColumnKey,
+              hasOriginalKey,
+              joinColumn: combined.joinTable.joinColumn,
+              rowHasFKColumn: rel.FK_COLUMN in row,
+              rowHasPKColumn: rel.PK_COLUMN in row,
+              fkValue: row[rel.FK_COLUMN],
+              pkValue: row[rel.PK_COLUMN],
+              sampleMapKeys,
+              matchingRowSample,
+            });
+          }
         });
       return newRow;
     });
     return processedRows;
-  }, [rightTableData, validatedCombinedColumns]);
+  }, [rightTableData, validatedCombinedColumns, allJoinedDataMaps, rightTable.schemaName, rightTable.tableName, flowLog]);
 
   // Helper function to create comparison key (using same logic as createComparisonKey in utils)
   const createSortKey = useCallback((row: Record<string, unknown>, columns: string[]): string => {
@@ -893,7 +1302,7 @@ export function TableComparisonView({
     }
     
     const quality = analyzeDataQuality(actualRows, columnsForAnalysis, {
-      nameColumns: ["Oid"],
+        nameColumns: ["Oid"],
     });
     
     // Map indices from actual rows back to synchronized rows
@@ -1338,6 +1747,7 @@ export function TableComparisonView({
                       selectedColumns={leftSelectedColumns}
                       onColumnPrioritiesChange={setLeftColumnPriorities}
                       onSortOrderChange={setLeftSortOrder}
+                      databaseName={leftTable.databaseName}
                       onSelectionChange={(selected) => {
                         if (flowLog) {
                           const added = Array.from(selected).filter(col => !leftSelectedColumns.has(col)).sort();
@@ -1384,6 +1794,18 @@ export function TableComparisonView({
                       }}
                       side="left"
                       tableColumns={leftTableColumns}
+                      otherSideRelationships={rightRelationships}
+                      currentTableRelationships={leftRelationships}
+                      otherSideTableInfo={rightTableData ? {
+                        schemaName: rightTable.schemaName,
+                        tableName: rightTable.tableName,
+                        columns: rightTableColumns,
+                        rows: rightTableData.rows || [],
+                      } : undefined}
+                      currentTableInfo={{
+                        schemaName: leftTable.schemaName,
+                        tableName: leftTable.tableName,
+                      }}
                     />
                   </div>
                 )}
@@ -1417,7 +1839,10 @@ export function TableComparisonView({
                   combinedColumns={validatedCombinedColumns.filter(c => c.side === "left")}
                   columnsToCompare={columnsToCompare}
                   flowLog={flowLog}
-                  containerClassName="h-full w-full mx-auto px-4 max-h-[500px]"
+                  containerClassName="h-full w-full mx-auto max-h-[500px]"
+                  joinedDataMap={rightJoinedDataMap}
+                  allJoinedDataMaps={allJoinedDataMaps}
+                  currentTableInfo={{ schemaName: leftTable.schemaName, tableName: leftTable.tableName }}
                 />
               </div>
 
@@ -1430,6 +1855,7 @@ export function TableComparisonView({
                       selectedColumns={rightSelectedColumns}
                       onColumnPrioritiesChange={setRightColumnPriorities}
                       onSortOrderChange={setRightSortOrder}
+                      databaseName={rightTable.databaseName}
                       onSelectionChange={(selected) => {
                         if (flowLog) {
                           const added = Array.from(selected).filter(col => !rightSelectedColumns.has(col)).sort();
@@ -1476,6 +1902,18 @@ export function TableComparisonView({
                       }}
                       side="right"
                       tableColumns={rightTableColumns}
+                      otherSideRelationships={leftRelationships}
+                      currentTableRelationships={rightRelationships}
+                      otherSideTableInfo={leftTableData ? {
+                        schemaName: leftTable.schemaName,
+                        tableName: leftTable.tableName,
+                        columns: leftTableColumns,
+                        rows: leftTableData.rows || [],
+                      } : undefined}
+                      currentTableInfo={{
+                        schemaName: rightTable.schemaName,
+                        tableName: rightTable.tableName,
+                      }}
                     />
                   </div>
                 )}
@@ -1509,7 +1947,10 @@ export function TableComparisonView({
                   combinedColumns={validatedCombinedColumns.filter(c => c.side === "right")}
                   columnsToCompare={columnsToCompare}
                   flowLog={flowLog}
-                  containerClassName="h-full w-full mx-auto px-4 max-h-[500px]"
+                  containerClassName="h-full w-full mx-auto max-h-[500px]"
+                  joinedDataMap={leftJoinedDataMap}
+                  allJoinedDataMaps={allJoinedDataMaps}
+                  currentTableInfo={{ schemaName: rightTable.schemaName, tableName: rightTable.tableName }}
                 />
               </div>
             </div>
@@ -1581,13 +2022,13 @@ export function TableComparisonView({
                 </div>
                 <div className="space-y-2 p-3 border rounded-lg">
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Chỉ có bên trái</span>
+                    <span className="text-sm text-muted-foreground">Dữ liệu chỉ có bên trái</span>
                     <Badge variant="default" className="bg-yellow-500 hover:bg-yellow-600">
                       {comparisonStats.leftOnlyRows}
                     </Badge>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Chỉ có bên phải</span>
+                    <span className="text-sm text-muted-foreground">Dữ liệu chỉ có bên phải</span>
                     <Badge variant="default" className="bg-yellow-500 hover:bg-yellow-600">
                       {comparisonStats.rightOnlyRows}
                     </Badge>
