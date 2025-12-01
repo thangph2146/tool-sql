@@ -18,46 +18,68 @@ export function useSyncedColumns(allColumns: string[]) {
   const userModifiedRef = useRef<boolean>(false);
   const syncPendingRef = useRef<boolean>(false);
 
-  // Sync when allColumns changes, but only if user hasn't manually modified
+  // Sync when allColumns changes, but preserve user selections
   useLayoutEffect(() => {
     if (prevKeyRef.current !== allColumnsKey) {
+      const prevKey = prevKeyRef.current;
       prevKeyRef.current = allColumnsKey;
       syncPendingRef.current = false;
       
-      // Reset user modification flag when columns change
-      if (!userModifiedRef.current) {
-        syncPendingRef.current = true;
-        // Use requestAnimationFrame to defer state update
-        const frameId = requestAnimationFrame(() => {
-          if (syncPendingRef.current) {
-            setSelectedColumns((prev) => {
-              if (allColumns.length === 0) {
-                return prev.size > 0 ? new Set<string>() : prev;
-              }
-              const prevArray = Array.from(prev).sort();
-              const allColumnsSorted = [...allColumns].sort();
-              const isMatching =
-                prevArray.length === allColumnsSorted.length &&
-                prevArray.every((val, idx) => val === allColumnsSorted[idx]);
-              
-              // Only update if empty or significantly different
-              if (prev.size === 0 || !isMatching) {
-                return new Set(allColumns);
-              }
+      // Always preserve user selections when columns change
+      // This includes combined columns which may not be in allColumns
+      syncPendingRef.current = true;
+      const frameId = requestAnimationFrame(() => {
+        if (syncPendingRef.current) {
+          setSelectedColumns((prev) => {
+            if (allColumns.length === 0) {
+              // If allColumns is empty, preserve all previous selections (including combined columns)
               return prev;
+            }
+            
+            const preserved = new Set<string>();
+            // Keep columns that exist in allColumns OR are in previous selection (preserve combined columns)
+            prev.forEach(col => {
+              // Always preserve if it's in allColumns, or if it's a previous selection (could be combined column)
+              if (allColumns.includes(col)) {
+                preserved.add(col);
+              } else if (prev.size > 0) {
+                // Preserve previous selections even if not in allColumns (for combined columns)
+                // This ensures combined columns are not lost when filtering
+                preserved.add(col);
+              }
             });
-            syncPendingRef.current = false;
-          }
-        });
-        
-        return () => {
-          cancelAnimationFrame(frameId);
+            
+            // If user has modified, always preserve their selections
+            if (userModifiedRef.current) {
+              return preserved.size > 0 ? preserved : prev;
+            }
+            
+            // If no previous selections and this is initial load, select all
+            if (prev.size === 0 && prevKey === '') {
+              return new Set(allColumns);
+            }
+            
+            // If we have preserved selections, return them
+            if (preserved.size > 0) {
+              return preserved;
+            }
+            
+            // Otherwise, if this is initial load and no preserved, select all
+            if (prevKey === '') {
+              return new Set(allColumns);
+            }
+            
+            // Keep previous selections
+            return prev;
+          });
           syncPendingRef.current = false;
-        };
-      } else {
-        // Reset flag for next change
-        userModifiedRef.current = false;
-      }
+        }
+      });
+      
+      return () => {
+        cancelAnimationFrame(frameId);
+        syncPendingRef.current = false;
+      };
     }
   }, [allColumnsKey, allColumns]);
 

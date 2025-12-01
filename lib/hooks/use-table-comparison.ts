@@ -20,6 +20,9 @@ export function useTableComparison({
       return null;
     }
 
+    // For comparison, we need to handle combined columns
+    // The rows should already have combined column values from the parent component
+    // But we need to ensure backward compatibility - original column names still work
     return compareAllRows(leftRows, rightRows, columnsToCompare);
   }, [leftRows, rightRows, columnsToCompare]);
 }
