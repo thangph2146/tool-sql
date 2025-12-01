@@ -29,6 +29,7 @@ import { FLOW_NAMES } from "@/lib/constants/flow-constants";
 import { useSyncedColumns } from "@/lib/hooks/use-synced-columns";
 import { ColumnSelector, type CombinedColumn } from "./column-selector";
 import { getColumnValue, validateCombinedColumns } from "@/lib/utils/combined-column-utils";
+import { normalizeForComparison, isNullRow } from "@/lib/utils/table-comparison-utils";
 
 interface TableComparisonViewProps {
   leftTable: {
@@ -369,15 +370,14 @@ export function TableComparisonView({
   // Track if user has manually modified left/right columns selection
   const [leftColumnsUserModified, setLeftColumnsUserModified] = useState(false);
   const [rightColumnsUserModified, setRightColumnsUserModified] = useState(false);
+  
+  // Track column priorities and sort order for left and right tables
+  const [leftColumnPriorities, setLeftColumnPriorities] = useState<Map<string, number>>(new Map());
+  const [rightColumnPriorities, setRightColumnPriorities] = useState<Map<string, number>>(new Map());
+  const [leftSortOrder, setLeftSortOrder] = useState<"alphabetical" | "newest" | "oldest">("alphabetical");
+  const [rightSortOrder, setRightSortOrder] = useState<"alphabetical" | "newest" | "oldest">("alphabetical");
 
   // Get columns to compare (only columns that exist in both tables and are selected in both)
-  const columnsToCompare = useMemo(() => {
-    const commonColumns = leftTableColumns.filter(col => rightTableColumns.includes(col));
-    return commonColumns.filter(col => 
-      leftSelectedColumns.has(col) && rightSelectedColumns.has(col)
-    );
-  }, [leftTableColumns, rightTableColumns, leftSelectedColumns, rightSelectedColumns]);
-
   // Get columns to display for left table (only from left table's selected columns)
   const leftColumnsToDisplay = useMemo(() => {
     if (!leftTableData?.columns || leftTableData.columns.length === 0) {
@@ -406,8 +406,60 @@ export function TableComparisonView({
     }
     
     // Combine selected original columns with combined columns
-    return [...selectedOriginal, ...combinedCols];
-  }, [leftSelectedColumns, leftTableData, validatedCombinedColumns, leftColumnsUserModified]);
+    const allColumns = [...selectedOriginal, ...combinedCols];
+    
+    // Sort by priority (lower number = higher priority), then by sortOrder
+    return allColumns.sort((a, b) => {
+      const priorityA = leftColumnPriorities.get(a) ?? Infinity;
+      const priorityB = leftColumnPriorities.get(b) ?? Infinity;
+      
+      // If one has priority and the other doesn't, prioritize the one with priority
+      if (priorityA !== Infinity && priorityB === Infinity) {
+        return -1; // a comes first
+      }
+      if (priorityA === Infinity && priorityB !== Infinity) {
+        return 1; // b comes first
+      }
+      
+      // If both have priority, sort by priority value
+      if (priorityA !== Infinity && priorityB !== Infinity) {
+        if (priorityA !== priorityB) {
+          return priorityA - priorityB; // Lower priority number = higher priority
+        }
+      }
+      
+      // If same priority or no priority, sort by sortOrder
+      if (leftSortOrder === "alphabetical") {
+        return a.localeCompare(b);
+      } else if (leftSortOrder === "newest") {
+        // For regular columns, use their index in leftTableColumns
+        // For combined columns, use the index of their first source column
+        const indexA = leftTableColumns.indexOf(a) !== -1 
+          ? leftTableColumns.indexOf(a)
+          : (validatedCombinedColumns.find(c => c.side === "left" && c.name === a)?.sourceColumns[0] 
+              ? leftTableColumns.indexOf(validatedCombinedColumns.find(c => c.side === "left" && c.name === a)!.sourceColumns[0])
+              : -1);
+        const indexB = leftTableColumns.indexOf(b) !== -1
+          ? leftTableColumns.indexOf(b)
+          : (validatedCombinedColumns.find(c => c.side === "left" && c.name === b)?.sourceColumns[0]
+              ? leftTableColumns.indexOf(validatedCombinedColumns.find(c => c.side === "left" && c.name === b)!.sourceColumns[0])
+              : -1);
+        return indexB - indexA; // Reverse order (newest first)
+      } else { // oldest
+        const indexA = leftTableColumns.indexOf(a) !== -1
+          ? leftTableColumns.indexOf(a)
+          : (validatedCombinedColumns.find(c => c.side === "left" && c.name === a)?.sourceColumns[0]
+              ? leftTableColumns.indexOf(validatedCombinedColumns.find(c => c.side === "left" && c.name === a)!.sourceColumns[0])
+              : -1);
+        const indexB = leftTableColumns.indexOf(b) !== -1
+          ? leftTableColumns.indexOf(b)
+          : (validatedCombinedColumns.find(c => c.side === "left" && c.name === b)?.sourceColumns[0]
+              ? leftTableColumns.indexOf(validatedCombinedColumns.find(c => c.side === "left" && c.name === b)!.sourceColumns[0])
+              : -1);
+        return indexA - indexB; // Normal order (oldest first)
+      }
+    });
+  }, [leftSelectedColumns, leftTableData, validatedCombinedColumns, leftColumnsUserModified, leftColumnPriorities, leftSortOrder, leftTableColumns]);
 
   // Get columns to display for right table (only from right table's selected columns)
   const rightColumnsToDisplay = useMemo(() => {
@@ -439,13 +491,79 @@ export function TableComparisonView({
     
     // Combine selected original columns with combined columns
     // Always include combined columns even if they're not in the original table columns
-    return [...selectedOriginal, ...combinedCols];
-  }, [rightSelectedColumns, rightTableData, validatedCombinedColumns, rightColumnsUserModified]);
+    const allColumns = [...selectedOriginal, ...combinedCols];
+    
+    // Sort by priority (lower number = higher priority), then by sortOrder
+    return allColumns.sort((a, b) => {
+      const priorityA = rightColumnPriorities.get(a) ?? Infinity;
+      const priorityB = rightColumnPriorities.get(b) ?? Infinity;
+      
+      // If one has priority and the other doesn't, prioritize the one with priority
+      if (priorityA !== Infinity && priorityB === Infinity) {
+        return -1; // a comes first
+      }
+      if (priorityA === Infinity && priorityB !== Infinity) {
+        return 1; // b comes first
+      }
+      
+      // If both have priority, sort by priority value
+      if (priorityA !== Infinity && priorityB !== Infinity) {
+        if (priorityA !== priorityB) {
+          return priorityA - priorityB; // Lower priority number = higher priority
+        }
+      }
+      
+      // If same priority or no priority, sort by sortOrder
+      if (rightSortOrder === "alphabetical") {
+        return a.localeCompare(b);
+      } else if (rightSortOrder === "newest") {
+        // For regular columns, use their index in rightTableColumns
+        // For combined columns, use the index of their first source column
+        const indexA = rightTableColumns.indexOf(a) !== -1
+          ? rightTableColumns.indexOf(a)
+          : (validatedCombinedColumns.find(c => c.side === "right" && c.name === a)?.sourceColumns[0]
+              ? rightTableColumns.indexOf(validatedCombinedColumns.find(c => c.side === "right" && c.name === a)!.sourceColumns[0])
+              : -1);
+        const indexB = rightTableColumns.indexOf(b) !== -1
+          ? rightTableColumns.indexOf(b)
+          : (validatedCombinedColumns.find(c => c.side === "right" && c.name === b)?.sourceColumns[0]
+              ? rightTableColumns.indexOf(validatedCombinedColumns.find(c => c.side === "right" && c.name === b)!.sourceColumns[0])
+              : -1);
+        return indexB - indexA; // Reverse order (newest first)
+      } else { // oldest
+        const indexA = rightTableColumns.indexOf(a) !== -1
+          ? rightTableColumns.indexOf(a)
+          : (validatedCombinedColumns.find(c => c.side === "right" && c.name === a)?.sourceColumns[0]
+              ? rightTableColumns.indexOf(validatedCombinedColumns.find(c => c.side === "right" && c.name === a)!.sourceColumns[0])
+              : -1);
+        const indexB = rightTableColumns.indexOf(b) !== -1
+          ? rightTableColumns.indexOf(b)
+          : (validatedCombinedColumns.find(c => c.side === "right" && c.name === b)?.sourceColumns[0]
+              ? rightTableColumns.indexOf(validatedCombinedColumns.find(c => c.side === "right" && c.name === b)!.sourceColumns[0])
+              : -1);
+        return indexA - indexB; // Normal order (oldest first)
+      }
+    });
+  }, [rightSelectedColumns, rightTableData, validatedCombinedColumns, rightColumnsUserModified, rightColumnPriorities, rightSortOrder, rightTableColumns]);
 
-  // Process rows to include combined column values
+  // Get columns to compare - includes all columns that are displayed in both sides
+  // This includes both original columns and combined columns
+  const columnsToCompare = useMemo(() => {
+    // Get all displayed columns from both sides (includes combined columns)
+    const leftDisplayed = new Set(leftColumnsToDisplay);
+    const rightDisplayed = new Set(rightColumnsToDisplay);
+    
+    // Find intersection - columns that are displayed in both sides
+    const commonDisplayed = Array.from(leftDisplayed).filter(col => rightDisplayed.has(col));
+    
+    return commonDisplayed;
+  }, [leftColumnsToDisplay, rightColumnsToDisplay]);
+
+  // Process rows to include combined column values and synchronize row count
+  // Use the table with more rows as the base, and pad the other table with null rows
   const leftRowsWithCombined = useMemo(() => {
     if (!leftTableData?.rows) return [];
-    return leftTableData.rows.map(row => {
+    const processedRows = leftTableData.rows.map(row => {
       const newRow = { ...row };
       validatedCombinedColumns
         .filter(c => c.side === "left")
@@ -454,11 +572,12 @@ export function TableComparisonView({
         });
       return newRow;
     });
+    return processedRows;
   }, [leftTableData, validatedCombinedColumns]);
 
   const rightRowsWithCombined = useMemo(() => {
     if (!rightTableData?.rows) return [];
-    return rightTableData.rows.map(row => {
+    const processedRows = rightTableData.rows.map(row => {
       const newRow = { ...row };
       validatedCombinedColumns
         .filter(c => c.side === "right")
@@ -467,7 +586,185 @@ export function TableComparisonView({
         });
       return newRow;
     });
+    return processedRows;
   }, [rightTableData, validatedCombinedColumns]);
+
+  // Helper function to create comparison key (using same logic as createComparisonKey in utils)
+  const createSortKey = useCallback((row: Record<string, unknown>, columns: string[]): string => {
+    if (columns.length === 0) return '';
+    return columns
+      .map(col => {
+        const val = row[col];
+        // Use normalizeForComparison to extract actual value and normalize
+        const normalized = normalizeForComparison(val);
+        if (normalized === null || normalized === undefined) {
+          return 'null';
+        }
+        // For objects/arrays, use JSON.stringify for consistent key
+        if (typeof normalized === 'object') {
+          try {
+            return JSON.stringify(normalized);
+          } catch {
+            return String(normalized);
+          }
+        }
+        // For strings, use lowercase for case-insensitive comparison
+        if (typeof normalized === 'string') {
+          return normalized.toLowerCase();
+        }
+        return String(normalized);
+      })
+      .join('|');
+  }, []);
+
+  // Align rows: match rows with same values and ensure they have the same index
+  // This creates aligned arrays where matched rows are at the same index
+  const { synchronizedLeftRows, synchronizedRightRows } = useMemo(() => {
+    // Helper function to get all unique column names from rows
+    const getAllColumnsFromRows = (rows: Record<string, unknown>[]): string[] => {
+      if (rows.length === 0) return [];
+      const allColumns = new Set<string>();
+      rows.forEach(row => {
+        Object.keys(row).forEach(key => allColumns.add(key));
+      });
+      return Array.from(allColumns);
+    };
+
+    // Get all columns from actual rows to ensure null rows have the same structure
+    const leftAllColumns = leftRowsWithCombined.length > 0 
+      ? getAllColumnsFromRows(leftRowsWithCombined)
+      : (leftTableData?.columns?.map(c => String(c)) || []);
+    const rightAllColumns = rightRowsWithCombined.length > 0 
+      ? getAllColumnsFromRows(rightRowsWithCombined)
+      : (rightTableData?.columns?.map(c => String(c)) || []);
+
+    // Helper function to create a null row with all columns set to null
+    const createNullRow = (columns: string[]): Record<string, unknown> => {
+      const nullRow: Record<string, unknown> = {};
+      columns.forEach(col => { nullRow[col] = null; });
+      return nullRow;
+    };
+
+    if (columnsToCompare.length === 0) {
+      // No columns to compare, just pad with null rows
+      const leftCount = leftRowsWithCombined.length;
+      const rightCount = rightRowsWithCombined.length;
+      const maxCount = Math.max(leftCount, rightCount);
+      
+      const alignedLeft: Record<string, unknown>[] = [...leftRowsWithCombined];
+      const alignedRight: Record<string, unknown>[] = [...rightRowsWithCombined];
+      
+      // Pad left if needed
+      if (leftCount < maxCount) {
+        for (let i = leftCount; i < maxCount; i++) {
+          alignedLeft.push(createNullRow(leftAllColumns));
+        }
+      }
+      
+      // Pad right if needed
+      if (rightCount < maxCount) {
+        for (let i = rightCount; i < maxCount; i++) {
+          alignedRight.push(createNullRow(rightAllColumns));
+        }
+      }
+      
+      return { synchronizedLeftRows: alignedLeft, synchronizedRightRows: alignedRight };
+    }
+
+    // Create maps of rows by their comparison key
+    const leftRowMap = new Map<string, Record<string, unknown>[]>();
+    leftRowsWithCombined.forEach(row => {
+      const key = createSortKey(row, columnsToCompare);
+      if (!leftRowMap.has(key)) {
+        leftRowMap.set(key, []);
+      }
+      leftRowMap.get(key)!.push(row);
+    });
+
+    const rightRowMap = new Map<string, Record<string, unknown>[]>();
+    rightRowsWithCombined.forEach(row => {
+      const key = createSortKey(row, columnsToCompare);
+      if (!rightRowMap.has(key)) {
+        rightRowMap.set(key, []);
+      }
+      rightRowMap.get(key)!.push(row);
+    });
+
+    // Get all unique keys and sort them
+    const allKeys = Array.from(new Set([...leftRowMap.keys(), ...rightRowMap.keys()]));
+    allKeys.sort((a, b) => a.localeCompare(b, 'vi', { numeric: true, sensitivity: 'base' }));
+
+    // Build aligned arrays
+    const alignedLeft: Record<string, unknown>[] = [];
+    const alignedRight: Record<string, unknown>[] = [];
+
+    allKeys.forEach(key => {
+      const leftRows = leftRowMap.get(key) || [];
+      const rightRows = rightRowMap.get(key) || [];
+      const maxCount = Math.max(leftRows.length, rightRows.length);
+
+      // Add matched rows
+      for (let i = 0; i < maxCount; i++) {
+        if (i < leftRows.length && i < rightRows.length) {
+          // Both have rows at this position - match them
+          alignedLeft.push(leftRows[i]);
+          alignedRight.push(rightRows[i]);
+        } else if (i < leftRows.length) {
+          // Only left has row - pad right with null
+          alignedLeft.push(leftRows[i]);
+          alignedRight.push(createNullRow(rightAllColumns));
+        } else {
+          // Only right has row - pad left with null
+          alignedLeft.push(createNullRow(leftAllColumns));
+          alignedRight.push(rightRows[i]);
+        }
+      }
+    });
+
+    return { synchronizedLeftRows: alignedLeft, synchronizedRightRows: alignedRight };
+  }, [
+    leftRowsWithCombined,
+    rightRowsWithCombined,
+    columnsToCompare,
+    createSortKey,
+    leftTableData?.columns,
+    rightTableData?.columns,
+  ]);
+
+  // Log row synchronization details for debugging
+  useEffect(() => {
+    if (flowLog && open && synchronizedLeftRows && synchronizedRightRows) {
+      const sampleLeft = synchronizedLeftRows.slice(0, 5).map((row, idx) => {
+        const key = columnsToCompare.length > 0 ? createSortKey(row, columnsToCompare) : `index-${idx}`;
+        const sampleValues: Record<string, unknown> = {};
+        columnsToCompare.slice(0, 3).forEach(col => {
+          if (col in row) {
+            sampleValues[col] = row[col];
+          }
+        });
+        return { index: idx, key, sampleValues };
+      });
+      
+      const sampleRight = synchronizedRightRows.slice(0, 5).map((row, idx) => {
+        const key = columnsToCompare.length > 0 ? createSortKey(row, columnsToCompare) : `index-${idx}`;
+        const sampleValues: Record<string, unknown> = {};
+        columnsToCompare.slice(0, 3).forEach(col => {
+          if (col in row) {
+            sampleValues[col] = row[col];
+          }
+        });
+        return { index: idx, key, sampleValues };
+      });
+
+      flowLog.info('Row synchronization details', {
+        columnsToCompare: columnsToCompare.length > 0 ? columnsToCompare : 'NONE (padding by count)',
+        leftRowsCount: synchronizedLeftRows.length,
+        rightRowsCount: synchronizedRightRows.length,
+        sampleLeft,
+        sampleRight,
+      });
+    }
+  }, [synchronizedLeftRows, synchronizedRightRows, columnsToCompare, createSortKey, flowLog, open]);
 
   // Log when combined columns change
   useEffect(() => {
@@ -562,21 +859,139 @@ export function TableComparisonView({
     }
   }, [leftColumnsToDisplay, rightColumnsToDisplay, leftTableColumns, rightTableColumns, validatedCombinedColumns, columnsToCompare, leftTableData, rightTableData, flowLog, open]);
 
-  const leftDataQuality = useMemo(
-    () =>
-      analyzeDataQuality(leftRowsWithCombined || [], leftColumnsToDisplay, {
-        nameColumns: ["Oid"],
-      }),
-    [leftRowsWithCombined, leftColumnsToDisplay]
-  );
+  const leftDataQuality = useMemo(() => {
+    // Filter out null rows (padded rows) before analyzing duplicates
+    // Null rows should not be considered as duplicates
+    const synchronizedRows = synchronizedLeftRows || [];
+    const actualRows: Record<string, unknown>[] = [];
+    const actualToSynchronizedIndexMap = new Map<number, number>();
+    
+    synchronizedRows.forEach((row, synchronizedIndex) => {
+      const isNull = isNullRow(row, leftColumnsToDisplay.length > 0 ? leftColumnsToDisplay : Object.keys(row));
+      if (!isNull) {
+        const actualIndex = actualRows.length;
+        actualRows.push(row);
+        actualToSynchronizedIndexMap.set(actualIndex, synchronizedIndex);
+      }
+    });
+    
+    // Use all available columns if leftColumnsToDisplay is empty or insufficient
+    // This ensures duplicate detection works even when no columns are selected
+    let columnsForAnalysis = leftColumnsToDisplay;
+    if (columnsForAnalysis.length === 0 && actualRows.length > 0) {
+      // Get all unique column keys from all rows
+      const allColumns = new Set<string>();
+      actualRows.forEach(row => {
+        Object.keys(row).forEach(key => {
+          // Exclude metadata columns
+          if (!key.endsWith('_OriginalId') && !key.endsWith('_OriginalValue')) {
+            allColumns.add(key);
+          }
+        });
+      });
+      columnsForAnalysis = Array.from(allColumns);
+    }
+    
+    const quality = analyzeDataQuality(actualRows, columnsForAnalysis, {
+      nameColumns: ["Oid"],
+    });
+    
+    // Map indices from actual rows back to synchronized rows
+    const remappedDuplicateGroups = quality.duplicateGroups.map(group => ({
+      ...group,
+      indices: group.indices.map(actualIdx => actualToSynchronizedIndexMap.get(actualIdx) ?? actualIdx),
+    }));
+    
+    const remappedDuplicateIndexSet = new Set<number>();
+    remappedDuplicateGroups.forEach(group => {
+      group.indices.forEach(idx => remappedDuplicateIndexSet.add(idx));
+    });
+    
+    const remappedNameDuplicateGroups = quality.nameDuplicateGroups.map(group => ({
+      ...group,
+      indices: group.indices.map(actualIdx => actualToSynchronizedIndexMap.get(actualIdx) ?? actualIdx),
+    }));
+    
+    const remappedNameDuplicateIndexSet = new Set<number>();
+    remappedNameDuplicateGroups.forEach(group => {
+      group.indices.forEach(idx => remappedNameDuplicateIndexSet.add(idx));
+    });
+    
+    return {
+      ...quality,
+      duplicateGroups: remappedDuplicateGroups,
+      duplicateIndexSet: remappedDuplicateIndexSet,
+      nameDuplicateGroups: remappedNameDuplicateGroups,
+      nameDuplicateIndexSet: remappedNameDuplicateIndexSet,
+    };
+  }, [synchronizedLeftRows, leftColumnsToDisplay]);
 
-  const rightDataQuality = useMemo(
-    () =>
-      analyzeDataQuality(rightRowsWithCombined || [], rightColumnsToDisplay, {
-        nameColumns: ["Oid"],
-      }),
-    [rightRowsWithCombined, rightColumnsToDisplay]
-  );
+  const rightDataQuality = useMemo(() => {
+    // Filter out null rows (padded rows) before analyzing duplicates
+    // Null rows should not be considered as duplicates
+    const synchronizedRows = synchronizedRightRows || [];
+    const actualRows: Record<string, unknown>[] = [];
+    const actualToSynchronizedIndexMap = new Map<number, number>();
+    
+    synchronizedRows.forEach((row, synchronizedIndex) => {
+      const isNull = isNullRow(row, rightColumnsToDisplay.length > 0 ? rightColumnsToDisplay : Object.keys(row));
+      if (!isNull) {
+        const actualIndex = actualRows.length;
+        actualRows.push(row);
+        actualToSynchronizedIndexMap.set(actualIndex, synchronizedIndex);
+      }
+    });
+    
+    // Use all available columns if rightColumnsToDisplay is empty or insufficient
+    // This ensures duplicate detection works even when no columns are selected
+    let columnsForAnalysis = rightColumnsToDisplay;
+    if (columnsForAnalysis.length === 0 && actualRows.length > 0) {
+      // Get all unique column keys from all rows
+      const allColumns = new Set<string>();
+      actualRows.forEach(row => {
+        Object.keys(row).forEach(key => {
+          // Exclude metadata columns
+          if (!key.endsWith('_OriginalId') && !key.endsWith('_OriginalValue')) {
+            allColumns.add(key);
+          }
+        });
+      });
+      columnsForAnalysis = Array.from(allColumns);
+    }
+    
+    const quality = analyzeDataQuality(actualRows, columnsForAnalysis, {
+      nameColumns: ["Oid"],
+    });
+    
+    // Map indices from actual rows back to synchronized rows
+    const remappedDuplicateGroups = quality.duplicateGroups.map(group => ({
+      ...group,
+      indices: group.indices.map(actualIdx => actualToSynchronizedIndexMap.get(actualIdx) ?? actualIdx),
+    }));
+    
+    const remappedDuplicateIndexSet = new Set<number>();
+    remappedDuplicateGroups.forEach(group => {
+      group.indices.forEach(idx => remappedDuplicateIndexSet.add(idx));
+    });
+    
+    const remappedNameDuplicateGroups = quality.nameDuplicateGroups.map(group => ({
+      ...group,
+      indices: group.indices.map(actualIdx => actualToSynchronizedIndexMap.get(actualIdx) ?? actualIdx),
+    }));
+    
+    const remappedNameDuplicateIndexSet = new Set<number>();
+    remappedNameDuplicateGroups.forEach(group => {
+      group.indices.forEach(idx => remappedNameDuplicateIndexSet.add(idx));
+    });
+    
+    return {
+      ...quality,
+      duplicateGroups: remappedDuplicateGroups,
+      duplicateIndexSet: remappedDuplicateIndexSet,
+      nameDuplicateGroups: remappedNameDuplicateGroups,
+      nameDuplicateIndexSet: remappedNameDuplicateIndexSet,
+    };
+  }, [synchronizedRightRows, rightColumnsToDisplay]);
 
   // Validate data when show reference is enabled
   const dataValidation = useMemo(() => {
@@ -610,10 +1025,10 @@ export function TableComparisonView({
   }, [includeReferences, leftTableData, rightTableData, leftRelationships.length, rightRelationships.length]);
 
   // Compare rows using optimized hook (with combined columns support)
-  // Note: Combined columns are already processed in leftRowsWithCombined and rightRowsWithCombined
+  // Note: Use synchronized rows to ensure rows with same values are at the same index
   const comparisonResult = useTableComparison({ 
-    leftRows: leftRowsWithCombined || [],
-    rightRows: rightRowsWithCombined || [],
+    leftRows: synchronizedLeftRows || [],
+    rightRows: synchronizedRightRows || [],
     columnsToCompare,
   });
 
@@ -625,11 +1040,26 @@ export function TableComparisonView({
     const actualTotalRows = Math.max(leftTotalRows, rightTotalRows);
 
     // Get rows that were actually compared
-    // If comparisonResult exists, use its size (actual compared rows)
-    // Otherwise, use the max of loaded rows
+    // Use synchronized rows count (both tables now have the same number of rows)
     const leftLoadedRows = leftRowsWithCombined?.length || 0;
     const rightLoadedRows = rightRowsWithCombined?.length || 0;
-    const comparedRowsCount = comparisonResult?.size ?? Math.max(leftLoadedRows, rightLoadedRows);
+    const synchronizedRowCount = Math.max(synchronizedLeftRows?.length || 0, synchronizedRightRows?.length || 0);
+    
+    let comparedRowsCount = 0;
+    if (comparisonResult) {
+      comparisonResult.forEach((result) => {
+        // Count rows that were matched (same or different), not left-only or right-only
+        if (result.status === "same" || result.status === "different") {
+          comparedRowsCount++;
+        }
+      });
+      // If no matches found but we have synchronized rows, use synchronized row count
+      if (comparedRowsCount === 0 && synchronizedRowCount > 0) {
+        comparedRowsCount = synchronizedRowCount;
+      }
+    } else {
+      comparedRowsCount = synchronizedRowCount;
+    }
 
     if (!comparisonResult || comparisonResult.size === 0) {
       return {
@@ -644,6 +1074,8 @@ export function TableComparisonView({
           rightTableData?.columns?.length || 0
         ),
         comparedColumns: columnsToCompare.length,
+        leftSelectedColumns: leftSelectedColumns.size,
+        rightSelectedColumns: rightSelectedColumns.size,
         leftTotalRows,
         rightTotalRows,
       };
@@ -672,35 +1104,15 @@ export function TableComparisonView({
     });
 
     // Calculate compared columns
-    // Include columns that are in columnsToCompare (common columns selected in both sides)
-    let comparedColsCount = columnsToCompare.length;
+    // columnsToCompare includes all columns that are displayed in both sides with the same name
+    // This is the correct count for actual comparison
+    const comparedColsCount = columnsToCompare.length;
     
-    // Also count combined columns that have the same name and are selected in both sides
-    const combinedColumnNames = new Set<string>();
-    validatedCombinedColumns.forEach((combined) => {
-      if (combined.name && !combinedColumnNames.has(combined.name)) {
-        combinedColumnNames.add(combined.name);
-      }
-    });
-    
-    // Check if any combined column name is selected in both sides
-    combinedColumnNames.forEach((combinedName) => {
-      const leftHas = leftSelectedColumns.has(combinedName);
-      const rightHas = rightSelectedColumns.has(combinedName);
-      const leftHasCombined = validatedCombinedColumns.some(
-        (c) => c.side === "left" && c.name === combinedName
-      );
-      const rightHasCombined = validatedCombinedColumns.some(
-        (c) => c.side === "right" && c.name === combinedName
-      );
-      
-      // If both sides have this combined column and it's selected in both, count it
-      if (leftHas && rightHas && leftHasCombined && rightHasCombined && !columnsToCompare.includes(combinedName)) {
-        comparedColsCount++;
-      }
-    });
+    // Also calculate total selected columns on each side for reference
+    const leftSelectedCount = leftSelectedColumns.size;
+    const rightSelectedCount = rightSelectedColumns.size;
 
-    return {
+    const stats = {
       totalRows: actualTotalRows,
       comparedRows: comparedRowsCount,
       sameRows,
@@ -712,19 +1124,110 @@ export function TableComparisonView({
         rightTableData?.columns?.length || 0
       ),
       comparedColumns: comparedColsCount,
+      leftSelectedColumns: leftSelectedCount,
+      rightSelectedColumns: rightSelectedCount,
       leftTotalRows,
       rightTotalRows,
     };
+
+    // Log detailed comparison statistics
+    if (flowLog && open) {
+      const samePercentage = comparedRowsCount > 0 ? ((sameRows / comparedRowsCount) * 100).toFixed(2) : '0.00';
+      const differentPercentage = comparedRowsCount > 0 ? ((differentRows / comparedRowsCount) * 100).toFixed(2) : '0.00';
+      const leftOnlyPercentage = comparedRowsCount > 0 ? ((leftOnlyRows / comparedRowsCount) * 100).toFixed(2) : '0.00';
+      const rightOnlyPercentage = comparedRowsCount > 0 ? ((rightOnlyRows / comparedRowsCount) * 100).toFixed(2) : '0.00';
+      
+      flowLog.info('Tổng kết so sánh 2 bảng', {
+        thongTinBang: {
+          trai: {
+            database: leftTable.databaseName,
+            schema: leftTable.schemaName,
+            table: leftTable.tableName,
+            totalRows: leftTotalRows,
+            loadedRows: leftLoadedRows,
+            columns: leftTableData?.columns?.length || 0,
+            selectedColumns: leftSelectedCount,
+          },
+          phai: {
+            database: rightTable.databaseName,
+            schema: rightTable.schemaName,
+            table: rightTable.tableName,
+            totalRows: rightTotalRows,
+            loadedRows: rightLoadedRows,
+            columns: rightTableData?.columns?.length || 0,
+            selectedColumns: rightSelectedCount,
+          },
+        },
+        thongKeSoSanh: {
+          tongSoRowsThucTe: actualTotalRows,
+          rowsDaSoSanh: comparedRowsCount,
+          rowsGiongNhau: sameRows,
+          rowsKhacNhau: differentRows,
+          chiCoBenTrai: leftOnlyRows,
+          chiCoBenPhai: rightOnlyRows,
+        },
+        tyLe: {
+          giongNhau: `${samePercentage}%`,
+          khacNhau: `${differentPercentage}%`,
+          chiCoMotBen: `${(parseFloat(leftOnlyPercentage) + parseFloat(rightOnlyPercentage)).toFixed(2)}%`,
+          chiCoBenTrai: `${leftOnlyPercentage}%`,
+          chiCoBenPhai: `${rightOnlyPercentage}%`,
+        },
+        columns: {
+          columnsSoSanh: columnsToCompare.length,
+          columnsSoSanhList: columnsToCompare.sort(),
+          columnsDaChonTrai: leftSelectedCount,
+          columnsDaChonPhai: rightSelectedCount,
+          tongColumns: stats.totalColumns,
+        },
+        cauHinh: {
+          combinedColumns: validatedCombinedColumns.length,
+          activeFilters: {
+            trai: leftTableFilters.activeFilterCount,
+            phai: rightTableFilters.activeFilterCount,
+            tong: leftTableFilters.activeFilterCount + rightTableFilters.activeFilterCount,
+          },
+          includeReferences,
+          leftLimit,
+          rightLimit,
+        },
+        chiTietSoSanh: {
+          leftLoadedRows,
+          rightLoadedRows,
+          comparisonResultSize: comparisonResult?.size || 0,
+          hasComparisonResult: !!comparisonResult,
+        },
+      });
+    }
+
+    return stats;
   }, [
     comparisonResult,
     leftRowsWithCombined,
     rightRowsWithCombined,
+    synchronizedLeftRows,
+    synchronizedRightRows,
     leftTableData,
     rightTableData,
     columnsToCompare,
-    validatedCombinedColumns,
     leftSelectedColumns,
     rightSelectedColumns,
+    finalLeftTableData?.totalRows,
+    finalRightTableData?.totalRows,
+    flowLog,
+    open,
+    leftTable.databaseName,
+    leftTable.schemaName,
+    leftTable.tableName,
+    rightTable.databaseName,
+    rightTable.schemaName,
+    rightTable.tableName,
+    validatedCombinedColumns.length,
+    leftTableFilters.activeFilterCount,
+    rightTableFilters.activeFilterCount,
+    includeReferences,
+    leftLimit,
+    rightLimit,
   ]);
 
   // Memoize computed values for performance
@@ -833,6 +1336,8 @@ export function TableComparisonView({
                     <ColumnSelector
                       availableColumns={leftTableColumns}
                       selectedColumns={leftSelectedColumns}
+                      onColumnPrioritiesChange={setLeftColumnPriorities}
+                      onSortOrderChange={setLeftSortOrder}
                       onSelectionChange={(selected) => {
                         if (flowLog) {
                           const added = Array.from(selected).filter(col => !leftSelectedColumns.has(col)).sort();
@@ -887,7 +1392,7 @@ export function TableComparisonView({
                   schemaName={leftTable.schemaName}
                   tableName={leftTable.tableName}
                   columns={leftColumnsToDisplay}
-                  rows={leftRowsWithCombined || []}
+                  rows={synchronizedLeftRows || []}
                   filters={leftTableFilters}
                   showFilters={showLeftFilters}
                   onToggleFilters={() => setShowLeftFilters(!showLeftFilters)}
@@ -923,6 +1428,8 @@ export function TableComparisonView({
                     <ColumnSelector
                       availableColumns={rightTableColumns}
                       selectedColumns={rightSelectedColumns}
+                      onColumnPrioritiesChange={setRightColumnPriorities}
+                      onSortOrderChange={setRightSortOrder}
                       onSelectionChange={(selected) => {
                         if (flowLog) {
                           const added = Array.from(selected).filter(col => !rightSelectedColumns.has(col)).sort();
@@ -977,7 +1484,7 @@ export function TableComparisonView({
                   schemaName={rightTable.schemaName}
                   tableName={rightTable.tableName}
                   columns={rightColumnsToDisplay}
-                  rows={rightRowsWithCombined || []}
+                  rows={synchronizedRightRows || []}
                   filters={rightTableFilters}
                   showFilters={showRightFilters}
                   onToggleFilters={() => setShowRightFilters(!showRightFilters)}
@@ -1086,8 +1593,16 @@ export function TableComparisonView({
                     </Badge>
                   </div>
                   <div className="flex items-center justify-between">
-                    <span className="text-sm text-muted-foreground">Columns so sánh</span>
+                    <span className="text-sm text-muted-foreground">Columns so sánh (cùng tên)</span>
                     <Badge variant="secondary">{comparisonStats.comparedColumns}</Badge>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground">Columns đã chọn (trái)</span>
+                    <Badge variant="outline">{comparisonStats.leftSelectedColumns ?? 0}</Badge>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm text-muted-foreground">Columns đã chọn (phải)</span>
+                    <Badge variant="outline">{comparisonStats.rightSelectedColumns ?? 0}</Badge>
                   </div>
                   <div className="flex items-center justify-between">
                     <span className="text-sm text-muted-foreground">Tổng columns</span>
@@ -1194,11 +1709,11 @@ export function TableComparisonView({
                   </div>
                 </div>
                 <div className="space-y-2 p-3 border rounded-lg">
-                  <div className="text-xs font-medium mb-2">Columns được so sánh</div>
+                  <div className="text-xs font-medium mb-2">Columns được so sánh (cùng tên)</div>
                   {columnsToCompare.length > 0 ? (
                     <div className="space-y-1">
                       <div className="text-xs text-muted-foreground mb-1">
-                        {columnsToCompare.length} columns:
+                        {columnsToCompare.length} columns có cùng tên ở cả hai bảng:
                       </div>
                       <div className="max-h-32 overflow-y-auto space-y-1">
                         {columnsToCompare.slice(0, 10).map((col) => (
@@ -1214,8 +1729,19 @@ export function TableComparisonView({
                       </div>
                     </div>
                   ) : (
-                    <div className="text-xs text-muted-foreground italic">
-                      Chưa có columns nào được chọn để so sánh
+                    <div className="space-y-2">
+                      <div className="text-xs text-muted-foreground italic">
+                        Không có columns nào có cùng tên ở cả hai bảng để so sánh
+                      </div>
+                      {(comparisonStats.leftSelectedColumns ?? 0) > 0 || (comparisonStats.rightSelectedColumns ?? 0) > 0 ? (
+                        <div className="text-xs text-muted-foreground">
+                          <div>Columns đã chọn bên trái: {comparisonStats.leftSelectedColumns ?? 0}</div>
+                          <div>Columns đã chọn bên phải: {comparisonStats.rightSelectedColumns ?? 0}</div>
+                          <div className="mt-1 text-amber-600 dark:text-amber-400">
+                            💡 Để so sánh, cần có columns có cùng tên ở cả hai bảng hoặc sử dụng combined columns
+                          </div>
+                        </div>
+                      ) : null}
                     </div>
                   )}
                 </div>

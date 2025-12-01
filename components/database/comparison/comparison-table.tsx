@@ -15,7 +15,6 @@ import {
 } from "@/components/ui/select";
 import { Label } from "@/components/ui/label";
 import { Input } from "@/components/ui/input";
-import { Field, FieldContent, FieldLabel } from "@/components/ui/field";
 import { TableCell as TableCellComponent } from "../tables/table-cell";
 import { cn } from "@/lib/utils";
 import type { UseTableFiltersReturn } from "@/lib/hooks/use-table-filters";
@@ -30,6 +29,7 @@ import { TABLE_LIMIT_OPTIONS } from "@/lib/constants/table-constants";
 import type { CombinedColumn } from "./column-selector";
 import { getColumnValue } from "@/lib/utils/combined-column-utils";
 import { logger } from "@/lib/logger";
+import { isNullRow } from "@/lib/utils/table-comparison-utils";
 
 type FlowLogger = ReturnType<typeof logger.createFlowLogger>;
 
@@ -152,7 +152,18 @@ export function ComparisonTable({
 
   // Sort rows based on multiple sortColumns
   // Also create a mapping from original index to sorted index
+  // IMPORTANT: When columnsToCompare is not empty, rows are already synchronized
+  // Sorting should be disabled or only allowed on columnsToCompare to maintain synchronization
   const sortedRowsData = useMemo(() => {
+    // If columnsToCompare is not empty, disable sorting to maintain row synchronization
+    // Rows are already aligned by comparison key, sorting would break the alignment
+    if (columnsToCompare.length > 0) {
+      // No sorting when rows are synchronized, create identity map
+      const identityMap = new Map<number, number>();
+      rows.forEach((_, index) => identityMap.set(index, index));
+      return { sortedRows: rows, originalToSortedIndexMap: identityMap };
+    }
+    
     if (sortColumns.length === 0) {
       // No sorting, create identity map
       const identityMap = new Map<number, number>();
@@ -231,10 +242,18 @@ export function ComparisonTable({
     });
 
     return { sortedRows: sortedRowsResult, originalToSortedIndexMap: indexMap };
-  }, [rows, sortColumns, combinedColumns]);
+  }, [rows, sortColumns, combinedColumns, columnsToCompare.length]);
 
   const sortedRows = sortedRowsData.sortedRows;
   const originalToSortedIndexMap = sortedRowsData.originalToSortedIndexMap;
+
+  // Reset sorting when columnsToCompare changes from empty to non-empty
+  // This ensures rows remain synchronized when comparison is active
+  useEffect(() => {
+    if (columnsToCompare.length > 0 && sortColumns.length > 0) {
+      setSortColumns([]);
+    }
+  }, [columnsToCompare.length, sortColumns.length]);
 
   // Log filtered/sorted data
   useEffect(() => {
@@ -681,6 +700,14 @@ export function ComparisonTable({
         >
           <TableHeader>
             <TableRow>
+              {/* STT column header */}
+              {!isLoading || columns.length > 0 ? (
+                <TableHead className="font-semibold p-2 text-xs w-[100px] min-w-[100px] max-w-[100px] sticky left-0 bg-background z-10 border-r">
+                  <div className="flex items-center justify-center gap-1">
+                    <span>STT</span>
+                  </div>
+                </TableHead>
+              ) : null}
               {isLoading && columns.length === 0 ? (
                 <TableHead colSpan={1} className="font-semibold p-2 text-xs">
                   <div className="flex items-center gap-1">
@@ -717,6 +744,8 @@ export function ComparisonTable({
                           className="h-5 w-5 ml-auto"
                           onClick={() => handleSort(column)}
                           type="button"
+                          disabled={columnsToCompare.length > 0}
+                          title={columnsToCompare.length > 0 ? "Không thể sắp xếp khi đang so sánh để giữ đồng bộ hàng" : "Sắp xếp"}
                         >
                           <ArrowUpDown className={cn("h-3 w-3", sortColumns.some(s => s.column === column) ? "opacity-100" : "opacity-50")} />
                         </Button>
@@ -814,7 +843,7 @@ export function ComparisonTable({
             {isLoading && rows.length === 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={columns.length}
+                  colSpan={columns.length + 1}
                   className="text-center py-8 text-muted-foreground text-xs"
                 >
                   <div className="flex flex-col items-center gap-2">
@@ -833,6 +862,9 @@ export function ComparisonTable({
                   if (processedIndices.has(rowIndex)) {
                     return;
                   }
+                  
+                  // Check if this is a null row (padded row for synchronization)
+                  const isNull = isNullRow(row, columns.length > 0 ? columns : Object.keys(row));
                   
                   const firstColumn = columns[0];
                   const primaryOriginalId =
@@ -883,6 +915,10 @@ export function ComparisonTable({
                         isHighlighted && "ring-2 ring-primary"
                       )}
                     >
+                      {/* STT cell */}
+                      <TableCell className="font-medium p-2 text-xs w-[100px] min-w-[100px] max-w-[100px] sticky left-0 bg-background z-10 border-r text-center">
+                        {(pagination?.offset ?? 0) + rowIndex + 1}
+                      </TableCell>
                       {columns.map((column, colIndex) => {
                         const isDiffColumn = diff?.diffColumns?.includes(column);
                         // Check if this is a combined column
@@ -927,7 +963,9 @@ export function ComparisonTable({
                           cellStatus === "same" && "bg-green-50/50 dark:bg-green-950/20",
                           cellStatus === "different" && "bg-red-50/50 dark:bg-red-950/20",
                           cellStatus === "duplicate" && "bg-yellow-50/50 dark:bg-yellow-950/20",
-                          isDiffColumn && "font-semibold"
+                          isDiffColumn && "font-semibold",
+                          // Ensure null rows have minimum height to match other rows
+                          isNull && "min-h-[2.5rem]"
                         );
                         
                         return (
@@ -935,7 +973,7 @@ export function ComparisonTable({
                             key={column}
                             className={cellClassName}
                           >
-                            <div className="flex items-center gap-1">
+                            <div className="flex items-center gap-1 min-h-[1.5rem]">
                               {showExpandButton && (
                                 <Button
                                   variant="ghost"
@@ -961,7 +999,12 @@ export function ComparisonTable({
                                   +{childCount}
                                 </Badge>
                               )}
-                              <TableCellComponent value={cellValue} />
+                              {isNull ? (
+                                // Render invisible character to maintain row height for null rows
+                                <span className="opacity-0 select-none">—</span>
+                              ) : (
+                                <TableCellComponent value={cellValue} />
+                              )}
                             </div>
                           </TableCell>
                         );
@@ -1020,7 +1063,14 @@ export function ComparisonTable({
                               childIsHighlighted && "ring-2 ring-primary"
                             )}
                           >
+                            {/* STT cell for child row */}
+                            <TableCell className="font-medium p-2 text-xs w-[100px] min-w-[100px] max-w-[100px] sticky left-0 bg-muted/30 z-10 border-r text-center">
+                              {(pagination?.offset ?? 0) + childIndex + 1}
+                            </TableCell>
                             {columns.map((column) => {
+                              // Check if this child row is a null row
+                              const childIsNull = isNullRow(childRow, columns.length > 0 ? columns : Object.keys(childRow));
+                              
                               const isDiffColumn = childDiff?.diffColumns?.includes(column);
                               const combined = combinedColumns.find(c => c.name === column);
                               const rawValue = combined 
@@ -1049,7 +1099,9 @@ export function ComparisonTable({
                                 cellStatus === "same" && "bg-green-50/50 dark:bg-green-950/20",
                                 cellStatus === "different" && "bg-red-50/50 dark:bg-red-950/20",
                                 cellStatus === "duplicate" && "bg-yellow-50/50 dark:bg-yellow-950/20",
-                                isDiffColumn && "font-semibold"
+                                isDiffColumn && "font-semibold",
+                                // Ensure null rows have minimum height to match other rows
+                                childIsNull && "min-h-[2.5rem]"
                               );
                               
                               return (
@@ -1057,7 +1109,14 @@ export function ComparisonTable({
                                   key={column}
                                   className={cellClassName}
                                 >
-                                  <TableCellComponent value={cellValue} />
+                                  <div className="flex items-center gap-1 min-h-[1.5rem]">
+                                    {childIsNull ? (
+                                      // Render invisible character to maintain row height for null rows
+                                      <span className="opacity-0 select-none">—</span>
+                                    ) : (
+                                      <TableCellComponent value={cellValue} />
+                                    )}
+                                  </div>
                                 </TableCell>
                               );
                             })}
@@ -1075,7 +1134,7 @@ export function ComparisonTable({
             ) : columns.length > 0 ? (
               <TableRow>
                 <TableCell
-                  colSpan={columns.length}
+                  colSpan={columns.length + 1}
                   className="text-center py-8 text-muted-foreground text-xs"
                 >
                   {filters.hasActiveFilters
