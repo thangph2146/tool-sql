@@ -388,8 +388,8 @@ export function ComparisonTable({
         }
       });
       
-      // Sort and filter by search term
-      let options = Array.from(uniqueValues).sort((a, b) => a.localeCompare(b, 'vi', { numeric: true }));
+      // Filter by search term (no sorting for filter options)
+      let options = Array.from(uniqueValues);
       
       if (debouncedSearch.trim()) {
         const searchLower = debouncedSearch.toLowerCase();
@@ -689,25 +689,32 @@ export function ComparisonTable({
           </div>
         </div>
       </div>
-      <div className="flex-1 min-h-0 relative">
+      <div className="flex-1 min-h-[200px] relative overflow-hidden">
         {isLoading && (
-          <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80 backdrop-blur-sm">
-            <div className="flex flex-col items-center gap-2">
-              <Loader2 className="h-6 w-6 animate-spin text-primary" />
-              <span className="text-xs text-muted-foreground">
-                Loading {side} table...
-              </span>
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/95 backdrop-blur-sm">
+            <div className="flex flex-col items-center justify-center gap-4 p-6 min-h-[200px]">
+              <div className="relative">
+                <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              </div>
+              <div className="flex flex-col items-center gap-2">
+                <span className="text-sm font-semibold text-foreground">
+                  Loading {side} table...
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  Please wait while we fetch the data
+                </span>
+              </div>
             </div>
           </div>
         )}
         <Table
           key={`comparison-table-${side}-${debouncedFilterKey}-${rows.length}-${columns.length}`}
-          containerClassName={containerClassName}
+          containerClassName={cn("min-h-[200px]", containerClassName)}
         >
           <TableHeader>
             <TableRow>
-              {/* STT column header */}
-              {!isLoading || columns.length > 0 ? (
+              {/* STT column header - only show if there are actual rows */}
+              {!isLoading && rows.length > 0 && (!isLoading || columns.length > 0) ? (
                 <TableHead className="font-semibold p-2 text-xs w-[100px] min-w-[100px] max-w-[100px] sticky top-0 left-0 bg-background z-11 border-r">
                   <div className="flex items-center justify-center gap-1">
                     <span>STT</span>
@@ -858,10 +865,27 @@ export function ComparisonTable({
                   </div>
                 </TableCell>
               </TableRow>
-            ) : sortedRows.length > 0 ? (
+            ) : !isLoading && rows.length === 0 ? (
+              <TableRow>
+                <TableCell
+                  colSpan={columns.length + 1}
+                  className="text-center py-8 text-muted-foreground text-xs"
+                >
+                  <div className="flex flex-col items-center gap-2">
+                    <span>No data available</span>
+                  </div>
+                </TableCell>
+              </TableRow>
+            ) : sortedRows.length > 0 && rows.length > 0 ? (
               (() => {
                 const renderedRows: React.ReactNode[] = [];
                 const processedIndices = new Set<number>();
+                
+                // Count actual (non-null) rows to determine if we should show STT
+                const hasActualRows = sortedRows.some((row) => {
+                  const isNull = isNullRow(row, columns.length > 0 ? columns : Object.keys(row));
+                  return !isNull;
+                });
                 
                 sortedRows.forEach((row, rowIndex) => {
                   // Skip if already processed as child row
@@ -921,10 +945,12 @@ export function ComparisonTable({
                         isHighlighted && "ring-2 ring-primary"
                       )}
                     >
-                      {/* STT cell */}
-                      <TableCell className="font-medium p-2 text-xs w-[100px] min-w-[100px] max-w-[100px] sticky left-0 bg-background z-10 border-r text-center">
-                        {(pagination?.offset ?? 0) + rowIndex + 1}
-                      </TableCell>
+                      {/* STT cell - only show if there are actual rows (not just null rows) */}
+                      {hasActualRows && (
+                        <TableCell className="font-medium p-2 text-xs w-[100px] min-w-[100px] max-w-[100px] sticky left-0 bg-background z-10 border-r text-center">
+                          {(pagination?.offset ?? 0) + rowIndex + 1}
+                        </TableCell>
+                      )}
                       {columns.map((column, colIndex) => {
                         const isDiffColumn = diff?.diffColumns?.includes(column);
                         // Check if this is a combined column
@@ -1069,10 +1095,12 @@ export function ComparisonTable({
                               childIsHighlighted && "ring-2 ring-primary"
                             )}
                           >
-                            {/* STT cell for child row */}
-                            <TableCell className="font-medium p-2 text-xs w-[100px] min-w-[100px] max-w-[100px] sticky left-0 bg-muted/30 z-10 border-r text-center">
-                              {(pagination?.offset ?? 0) + childIndex + 1}
-                            </TableCell>
+                            {/* STT cell for child row - only show if there are actual rows */}
+                            {hasActualRows && (
+                              <TableCell className="font-medium p-2 text-xs w-[100px] min-w-[100px] max-w-[100px] sticky left-0 bg-muted/30 z-10 border-r text-center">
+                                {(pagination?.offset ?? 0) + childIndex + 1}
+                              </TableCell>
+                            )}
                             {columns.map((column) => {
                               // Check if this child row is a null row
                               const childIsNull = isNullRow(childRow, columns.length > 0 ? columns : Object.keys(childRow));

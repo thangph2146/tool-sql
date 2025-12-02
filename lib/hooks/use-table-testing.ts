@@ -15,7 +15,8 @@ interface UseTableTestingReturn {
   setTestingTable: (schema: string, table: string, isTesting: boolean) => void;
 }
 
-export function useTableTesting(databaseName: DatabaseName): UseTableTestingReturn {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function useTableTesting(_databaseName: DatabaseName): UseTableTestingReturn {
   // Note: databaseName is kept for future scoping of table statuses per database
   // Currently, table keys are scoped by schema.table only
   const [tableStatuses, setTableStatuses] = useState<

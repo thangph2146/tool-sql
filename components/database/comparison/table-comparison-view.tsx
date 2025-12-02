@@ -27,6 +27,7 @@ import { analyzeDataQuality } from "@/lib/utils/data-quality-utils";
 import { useFlowLoggerWithKey } from "@/lib/hooks/use-flow-logger";
 import { FLOW_NAMES } from "@/lib/constants/flow-constants";
 import { useSyncedColumns } from "@/lib/hooks/use-synced-columns";
+import { useComparisonLoadingStates } from "@/lib/hooks";
 import { ColumnSelector, type CombinedColumn } from "./column-selector";
 import { getColumnValue, validateCombinedColumns } from "@/lib/utils/combined-column-utils";
 import { normalizeForComparison, isNullRow } from "@/lib/utils/table-comparison-utils";
@@ -1649,8 +1650,20 @@ export function TableComparisonView({
     rightLimit,
   ]);
 
+  // Use centralized loading states hook for better UX
+  const loadingStates = useComparisonLoadingStates({
+    leftDataLoading: finalLeftIsLoading,
+    rightDataLoading: finalRightIsLoading,
+    leftRelationshipsLoading: leftRelationshipsData?.isLoading ?? false,
+    rightRelationshipsLoading: rightRelationshipsData?.isLoading ?? false,
+    leftData: leftTableData,
+    rightData: rightTableData,
+    leftRelationships: leftRelationships,
+    rightRelationships: rightRelationships,
+  });
+
   // Memoize computed values for performance
-  const isLoading = useMemo(() => finalLeftIsLoading || finalRightIsLoading, [finalLeftIsLoading, finalRightIsLoading]);
+  const isLoading = useMemo(() => loadingStates.isAnyLoading, [loadingStates.isAnyLoading]);
   const hasError = useMemo(() => finalLeftError || finalRightError, [finalLeftError, finalRightError]);
   
   // Debug: Log render conditions
@@ -1659,6 +1672,9 @@ export function TableComparisonView({
       flowLog.debug('Render conditions', {
         isLoading,
         hasError,
+        loadingProgress: loadingStates.loadingProgress,
+        isInitialLoading: loadingStates.isInitialLoading,
+        isPartialLoading: loadingStates.isPartialLoading,
         leftTableDataExists: !!leftTableData,
         rightTableDataExists: !!rightTableData,
         leftTableDataRows: leftTableData?.rows?.length ?? 0,
@@ -1668,7 +1684,7 @@ export function TableComparisonView({
         shouldRenderTables: !isLoading && !hasError && !!leftTableData && !!rightTableData,
       });
     }
-  }, [isLoading, hasError, leftTableData, rightTableData, flowLog]);
+  }, [isLoading, hasError, loadingStates, leftTableData, rightTableData, flowLog]);
   
   // Memoize active filter counts
   const leftActiveFilterCount = leftTableFilters.activeFilterCount;
@@ -1724,15 +1740,15 @@ export function TableComparisonView({
 
       {/* Content */}
       <div className="flex-1 overflow-hidden flex flex-col min-h-0">
-        {/* Only show global loading state on initial load when both tables have no data */}
-        {!leftTableData && !rightTableData && (
+        {/* Show global loading state on initial load when no data is available */}
+        {loadingStates.isInitialLoading && (
           <ComparisonLoadingState
-            isLoading={isLoading}
+            isLoading={loadingStates.isInitialLoading}
             loadingStates={{
-              leftData: finalLeftIsLoading,
-              rightData: finalRightIsLoading,
-              leftRelationships: leftRelationshipsData?.isLoading ?? false,
-              rightRelationships: rightRelationshipsData?.isLoading ?? false,
+              leftData: loadingStates.leftDataLoading,
+              rightData: loadingStates.rightDataLoading,
+              leftRelationships: loadingStates.leftRelationshipsLoading,
+              rightRelationships: loadingStates.rightRelationshipsLoading,
             }}
             hasError={!!hasError}
             errors={{
@@ -1741,15 +1757,16 @@ export function TableComparisonView({
               leftRelationships: leftRelationshipsData?.error,
               rightRelationships: rightRelationshipsData?.error,
             }}
+            loadingProgress={loadingStates.loadingProgress}
           />
         )}
         {/* Show tables even if one is loading - each table manages its own loading overlay */}
         {!hasError ? (
           <div className="flex-1 flex flex-col min-h-0">
             {/* Side by Side Tables */}
-            <div className="flex-1 grid grid-cols-2 gap-0 min-h-0 overflow-hidden">
+            <div className="flex-1 grid grid-cols-2 gap-0 min-h-[500px] overflow-hidden">
               {/* Left Table */}
-              <div className="flex flex-col border-r border-border min-h-0">
+              <div className="flex flex-col border-r border-border min-h-[500px] overflow-hidden">
                 {leftTableData && (
                   <div className="p-2 border-b border-border bg-muted/30">
                     <ColumnSelector
@@ -1857,7 +1874,7 @@ export function TableComparisonView({
               </div>
 
               {/* Right Table */}
-              <div className="flex flex-col border-l border-border min-h-0">
+              <div className="flex flex-col border-l border-border min-h-[500px] overflow-hidden">
                 {rightTableData && (
                   <div className="p-2 border-b border-border bg-muted/30">
                     <ColumnSelector

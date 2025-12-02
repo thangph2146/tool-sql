@@ -23,7 +23,9 @@ interface UseTableStatsManagerReturn {
   setStats: (schema: string, table: string, stats: TableStats) => void;
 }
 
-export function useTableStatsManager(databaseName: DatabaseName): UseTableStatsManagerReturn {
+// eslint-disable-next-line @typescript-eslint/no-unused-vars
+export function useTableStatsManager(_databaseName: DatabaseName): UseTableStatsManagerReturn {
+  // Note: databaseName is kept for future scoping of table stats per database
   const [tableStats, setTableStats] = useState<Map<string, TableStats>>(new Map());
 
   const getStats = useCallback(
@@ -92,7 +94,6 @@ export function useTableStatsFetcher({
   shouldFetch,
   onStatsFetched,
 }: UseTableStatsFetcherProps) {
-  const tableKey = `${schema}.${table}`;
   const { data: statsData, error } = useTableStats(databaseName, schema, table, shouldFetch);
 
   useEffect(() => {

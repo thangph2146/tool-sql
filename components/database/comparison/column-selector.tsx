@@ -88,7 +88,8 @@ export function ColumnSelector({
   side,
   tableColumns,
   onColumnPrioritiesChange,
-  onSortOrderChange,
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  onSortOrderChange, // Kept for compatibility but not used (sorting UI removed)
   otherSideRelationships = [],
   currentTableRelationships = [],
   otherSideTableInfo,
@@ -100,15 +101,16 @@ export function ColumnSelector({
   const [isJoinOpen, setIsJoinOpen] = useState(false);
   const [selectedCombineColumns, setSelectedCombineColumns] = useState<Set<string>>(new Set());
   const [combineName, setCombineName] = useState<string>("");
-  const [sortOrder, setSortOrder] = useState<"alphabetical" | "newest" | "oldest">("alphabetical");
-  const [combineSortOrder, setCombineSortOrder] = useState<"alphabetical" | "newest" | "oldest">("alphabetical");
+  // Sort order is fixed to "alphabetical" (no UI to change it)
+  const sortOrder: "alphabetical" | "newest" | "oldest" = "alphabetical";
+  // Removed combineSortOrder - no sorting for filter/combine dialog
   const [columnPriorities, setColumnPriorities] = useState<Map<string, number>>(new Map());
   // For joining from other table
   const [selectedJoinTable, setSelectedJoinTable] = useState<string>(""); // Format: "schema.table"
   const [selectedJoinRelationship, setSelectedJoinRelationship] = useState<RelationshipInfo | null>(null);
   const [selectedJoinColumn, setSelectedJoinColumn] = useState<string>("");
   const [joinColumnName, setJoinColumnName] = useState<string>("");
-  const [joinSortOrder, setJoinSortOrder] = useState<"alphabetical" | "newest" | "oldest">("alphabetical");
+  // Removed joinSortOrder - no sorting for filter/join dialog
   // For collapsing columns by table
   const [expandedTableGroups, setExpandedTableGroups] = useState<Set<string>>(new Set(["current", "combined"]));
 
@@ -144,29 +146,12 @@ export function ColumnSelector({
     });
   }, [tableColumns, availableColumns, sortOrder, columnPriorities]);
 
-  // Get columns available for combine dialog with separate sorting
+  // Get columns available for combine dialog (no sorting for filter)
   const combineColumns = useMemo(() => {
     const filtered = tableColumns.filter((col) => availableColumns.includes(col));
-    
-    // Sort based on combine sort order
-    if (combineSortOrder === "alphabetical") {
-      return [...filtered].sort((a, b) => a.localeCompare(b));
-    } else if (combineSortOrder === "newest") {
-      // Newest = columns that appear later in the original tableColumns array
-      return [...filtered].sort((a, b) => {
-        const indexA = tableColumns.indexOf(a);
-        const indexB = tableColumns.indexOf(b);
-        return indexB - indexA; // Reverse order (newest first)
-      });
-    } else { // oldest
-      // Oldest = columns that appear earlier in the original tableColumns array
-      return [...filtered].sort((a, b) => {
-        const indexA = tableColumns.indexOf(a);
-        const indexB = tableColumns.indexOf(b);
-        return indexA - indexB; // Normal order (oldest first)
-      });
-    }
-  }, [tableColumns, availableColumns, combineSortOrder]);
+    // Return filtered columns without sorting (filter behavior)
+    return filtered;
+  }, [tableColumns, availableColumns]);
 
   // Get combined columns for this side, sorted by priority
   const sideCombinedColumns = useMemo(() => {
@@ -490,20 +475,10 @@ export function ColumnSelector({
       }
     });
     
-    // Convert to array and sort
+    // Convert to array (no sorting for filter)
     return Array.from(tableMap.entries())
-      .map(([key, value]) => ({ key, ...value }))
-      .sort((a, b) => {
-        if (joinSortOrder === "alphabetical") {
-          return a.key.localeCompare(b.key);
-        } else if (joinSortOrder === "newest") {
-          // For newest, sort by number of relationships (more relationships = newer)
-          return b.relationships.length - a.relationships.length;
-        } else { // oldest
-          return a.relationships.length - b.relationships.length;
-        }
-      });
-  }, [currentTableRelationships, otherSideRelationships, currentTableInfo, joinSortOrder]);
+      .map(([key, value]) => ({ key, ...value }));
+  }, [currentTableRelationships, otherSideRelationships, currentTableInfo]);
 
   // Get relationships for selected table
   const relationshipsForSelectedTable = useMemo(() => {
@@ -624,23 +599,6 @@ export function ColumnSelector({
             </div>
           </div>
 
-          {/* Sort options */}
-          <div className="flex items-center gap-2 mb-2">
-            <Label className="text-xs text-muted-foreground">Sắp xếp:</Label>
-            <Select value={sortOrder} onValueChange={(value: "alphabetical" | "newest" | "oldest") => {
-              setSortOrder(value);
-              onSortOrderChange?.(value);
-            }}>
-              <SelectTrigger className="h-7 text-xs w-32">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="alphabetical">Theo chữ cái</SelectItem>
-                <SelectItem value="newest">Mới nhất</SelectItem>
-                <SelectItem value="oldest">Cũ nhất</SelectItem>
-              </SelectContent>
-            </Select>
-          </div>
           {/* Column list grouped by table */}
           <div className="max-h-60 overflow-y-auto border rounded-md p-2 space-y-2">
             {Array.from(sortedColumnsByTable.entries()).map(([tableKey, items]) => {
@@ -913,21 +871,6 @@ export function ColumnSelector({
           <div className="space-y-4">
             <h3 className="text-sm font-semibold">Kết hợp cột</h3>
             
-            {/* Sort options for combine dialog */}
-            <div className="flex items-center gap-2">
-              <Label className="text-xs text-muted-foreground">Sắp xếp:</Label>
-              <Select value={combineSortOrder} onValueChange={(value: "alphabetical" | "newest" | "oldest") => setCombineSortOrder(value)}>
-                <SelectTrigger className="h-7 text-xs w-32">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="alphabetical">Theo chữ cái</SelectItem>
-                  <SelectItem value="newest">Mới nhất</SelectItem>
-                  <SelectItem value="oldest">Cũ nhất</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-            
             <div className="space-y-2">
               <Label className="text-xs">Chọn cột để kết hợp (tối thiểu 1 cột)</Label>
               <div className="max-h-40 overflow-y-auto space-y-1 border rounded-md p-2 bg-background">
@@ -1021,21 +964,6 @@ export function ColumnSelector({
                 </div>
               ) : (
                 <>
-
-                  {/* Sort options */}
-                  <div className="flex items-center gap-2">
-                    <Label className="text-xs text-muted-foreground">Sắp xếp:</Label>
-                    <Select value={joinSortOrder} onValueChange={(value: "alphabetical" | "newest" | "oldest") => setJoinSortOrder(value)}>
-                      <SelectTrigger className="h-7 text-xs w-32">
-                        <SelectValue />
-                      </SelectTrigger>
-                      <SelectContent>
-                        <SelectItem value="alphabetical">Theo chữ cái</SelectItem>
-                        <SelectItem value="newest">Mới nhất</SelectItem>
-                        <SelectItem value="oldest">Cũ nhất</SelectItem>
-                      </SelectContent>
-                    </Select>
-                  </div>
 
                   {/* Step 1: Select Table */}
                   <div className="space-y-2">

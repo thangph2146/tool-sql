@@ -17,15 +17,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
 import { Button } from "@/components/ui/button";
-import { Label } from "@/components/ui/label";
 import { Check, XCircle, ChevronDown } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -56,7 +48,6 @@ export function MultiSelectCombobox({
   const [open, setOpen] = useState(false);
   const [searchTerm, setSearchTerm] = useState("");
   const [pendingValues, setPendingValues] = useState<string[]>([]);
-  const [sortOrder, setSortOrder] = useState<"alphabetical" | "newest" | "oldest">("alphabetical");
   
   const selectedValues = useMemo(() => {
     if (!value) return [];
@@ -68,6 +59,7 @@ export function MultiSelectCombobox({
 
   // Khi có onSearchChange, không filter client-side nữa, để server filter
   // Chỉ filter client-side nếu không có onSearchChange (backward compatibility)
+  // No sorting for filter options
   const normalizedOptions = useMemo(() => {
     let filtered: string[];
     
@@ -86,17 +78,9 @@ export function MultiSelectCombobox({
       }
     }
     
-    // Sort options based on sortOrder
-    if (sortOrder === "alphabetical") {
-      return [...filtered].sort((a, b) => a.localeCompare(b));
-    } else if (sortOrder === "newest") {
-      // Newest = reverse order (last items first)
-      return [...filtered].reverse();
-    } else { // oldest
-      // Oldest = original order (first items first)
-      return filtered;
-    }
-  }, [options, searchTerm, onSearchChange, sortOrder]);
+    // Return filtered options without sorting
+    return filtered;
+  }, [options, searchTerm, onSearchChange]);
 
   const toggleValue = (target: string, event?: React.MouseEvent) => {
     // Prevent default behavior (closing the popover)
@@ -188,20 +172,6 @@ export function MultiSelectCombobox({
               placeholder={`Search ${column}...`}
               className="h-8 text-xs"
             />
-            {/* Sort options */}
-            <div className="flex items-center gap-2 p-2 border-b">
-              <Label className="text-xs text-muted-foreground whitespace-nowrap">Sắp xếp:</Label>
-              <Select value={sortOrder} onValueChange={(value: "alphabetical" | "newest" | "oldest") => setSortOrder(value)}>
-                <SelectTrigger className="h-7 text-xs w-28">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="alphabetical">Chữ cái</SelectItem>
-                  <SelectItem value="newest">Mới nhất</SelectItem>
-                  <SelectItem value="oldest">Cũ nhất</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
             <CommandList className="max-h-48 overflow-y-auto">
               <CommandEmpty className="text-xs">
                 {loading

@@ -19,14 +19,6 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import { Label } from "@/components/ui/label";
 import { XCircle, ChevronDown, Check } from "lucide-react";
 import { useDebounce } from "@/lib/hooks/use-debounce";
 import { cn } from "@/lib/utils";
@@ -54,7 +46,6 @@ export function SingleSelectCombobox({
 }: SingleSelectComboboxProps) {
   const [searchTerm, setSearchTerm] = useState("");
   const [open, setOpen] = useState(false);
-  const [sortOrder, setSortOrder] = useState<"alphabetical" | "newest" | "oldest">("alphabetical");
   const debouncedSearch = useDebounce(searchTerm, 300);
   
   // Call onOpenChange when open state changes
@@ -71,7 +62,7 @@ export function SingleSelectCombobox({
     }
   }, [debouncedSearch, onSearchChange]);
 
-  // Filter and sort options
+  // Filter options (no sorting for filter)
   const filteredOptions = useMemo(() => {
     let filtered: string[];
     
@@ -90,17 +81,9 @@ export function SingleSelectCombobox({
       }
     }
     
-    // Sort options based on sortOrder
-    if (sortOrder === "alphabetical") {
-      return [...filtered].sort((a, b) => a.localeCompare(b));
-    } else if (sortOrder === "newest") {
-      // Newest = reverse order (last items first)
-      return [...filtered].reverse();
-    } else { // oldest
-      // Oldest = original order (first items first)
-      return filtered;
-    }
-  }, [options, debouncedSearch, onSearchChange, sortOrder]);
+    // Return filtered options without sorting
+    return filtered;
+  }, [options, debouncedSearch, onSearchChange]);
 
   const handleValueChange = (selectedValue: string) => {
     onChange(selectedValue);
@@ -150,20 +133,6 @@ export function SingleSelectCombobox({
               placeholder="Tìm kiếm..."
               className="h-8 text-xs"
             />
-            {/* Sort options */}
-            <div className="flex items-center gap-2 p-2 border-b">
-              <Label className="text-xs text-muted-foreground whitespace-nowrap">Sắp xếp:</Label>
-              <Select value={sortOrder} onValueChange={(value: "alphabetical" | "newest" | "oldest") => setSortOrder(value)}>
-                <SelectTrigger className="h-7 text-xs w-28">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="alphabetical">Chữ cái</SelectItem>
-                  <SelectItem value="newest">Mới nhất</SelectItem>
-                  <SelectItem value="oldest">Cũ nhất</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
             <CommandList className="max-h-48 overflow-y-auto">
               <CommandEmpty className="text-xs">
                 {loading
