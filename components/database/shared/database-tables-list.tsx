@@ -7,9 +7,6 @@ import {
   RefreshCw,
   Filter,
   XCircle,
-  GitCompare,
-  AlertCircle,
-  CheckCircle2,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
@@ -18,7 +15,6 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Separator } from "@/components/ui/separator";
-import { Badge } from "@/components/ui/badge";
 import {
   Select,
   SelectContent,
@@ -40,8 +36,7 @@ import { getMergedDatabaseConfig } from "@/lib/utils/db-config-storage";
 import { logger } from "@/lib/logger";
 import { TableDataView } from "../tables/table-data-view";
 import { useTableTesting, useTableStatsManager, useTableListState } from "@/lib/hooks";
-import { TableTester } from "./table-tester";
-import { TableStatsFetcher } from "./table-stats-fetcher";
+import { TableRowItemWrapper } from "./table-row-item-wrapper";
 import {
   Dialog,
   DialogContent,
@@ -49,7 +44,6 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-import { cn } from "@/lib/utils";
 import { TABLE_LIST_LIMIT_OPTIONS } from "@/lib/constants/table-constants";
 import { useDatabaseTables } from "@/lib/hooks/use-database-query";
 
@@ -107,6 +101,7 @@ export function DatabaseTablesList({
 
   // Use hook to fetch tables with server-side filtering and pagination
   // Use debounced filter text for API calls
+  // Use select to only subscribe to data we need
   const { data: tablesData, isLoading: tablesLoading } = useDatabaseTables(
     databaseName,
     true, // enabled
@@ -124,7 +119,10 @@ export function DatabaseTablesList({
   }, [tablesData?.data?.tables, propsTables]);
 
   const isLoading = tablesLoading || propsIsLoading || false;
-  const totalCount = tablesData?.data?.totalCount || tables.length;
+  const totalCount = useMemo(
+    () => tablesData?.data?.totalCount || tables.length,
+    [tablesData?.data?.totalCount, tables.length]
+  );
 
   // Recalculate totalPages with actual totalCount
   const totalPages = useMemo(
@@ -348,233 +346,51 @@ export function DatabaseTablesList({
             <TableBody>
               {paginatedTables.length > 0 ? (
                 paginatedTables.map((table) => {
-                  const isSelectedLeft =
-                    selectedForComparison?.left?.databaseName ===
-                      databaseName &&
-                    selectedForComparison?.left?.schema ===
-                      table.TABLE_SCHEMA &&
-                    selectedForComparison?.left?.table === table.TABLE_NAME;
-                  const isSelectedRight =
-                    selectedForComparison?.right?.databaseName ===
-                      databaseName &&
-                    selectedForComparison?.right?.schema ===
-                      table.TABLE_SCHEMA &&
-                    selectedForComparison?.right?.table === table.TABLE_NAME;
-                  const isSelected = isSelectedLeft || isSelectedRight;
                   const tableKey = `${table.TABLE_SCHEMA}.${table.TABLE_NAME}`;
                   const status = tableStatuses.get(tableKey) || "idle";
                   const isTesting = status === "testing";
-                  const isSuccess = status === "success";
-                  // hasError: status is "error" OR table is in errorTables Set
-                  // But if status is "success", we trust the status over errorTables
-                  const hasError = status === "error" || (status !== "success" && hasTableError(
+                  const hasError =
+                    status === "error" ||
+                    (status !== "success" &&
+                      hasTableError(table.TABLE_SCHEMA, table.TABLE_NAME));
+                  const stats = getStats(
                     table.TABLE_SCHEMA,
-                    table.TABLE_NAME
-                  ));
-                  // Use stats from API response if available, otherwise use fetched stats
-                  // Allow partial stats (show what we have, even if some values are 0)
-                  const stats = getStats(table.TABLE_SCHEMA, table.TABLE_NAME, tables);
+                    table.TABLE_NAME,
+                    tables
+                  );
                   const hasStats = stats !== null;
 
                   return (
-                    <TableRow
+                    <TableRowItemWrapper
                       key={tableKey}
-                      className={`cursor-pointer transition-colors ${
-                        hasError
-                          ? "bg-red-50 dark:bg-red-950/20 hover:bg-red-100 dark:hover:bg-red-950/30"
-                          : isSelectedLeft
-                          ? "bg-blue-500/10 hover:bg-blue-500/20"
-                          : isSelectedRight
-                          ? "bg-green-500/10 hover:bg-green-500/20"
-                          : "hover:bg-accent"
-                      }`}
-                      onClick={() => {
-                        handleTableClick(table.TABLE_SCHEMA, table.TABLE_NAME);
+                      table={table}
+                      databaseName={databaseName}
+                      selectedForComparison={selectedForComparison}
+                      tableKey={tableKey}
+                      status={status}
+                      isTesting={isTesting}
+                      hasError={hasError}
+                      stats={stats}
+                      hasStats={hasStats}
+                      onTableClick={handleTableClick}
+                      onCompareTable={onCompareTable}
+                      onStatusChange={setTableStatus}
+                      onErrorChange={setErrorTable}
+                      onTestingChange={setTestingTable}
+                      onStatsUpdate={(schema, table, partialStats) => {
+                        const currentStats = getStats(schema, table, tables);
+                        if (!currentStats || currentStats.columnCount === 0) {
+                          setStats(schema, table, {
+                            rowCount: currentStats?.rowCount ?? 0,
+                            columnCount: partialStats.columnCount,
+                            relationshipCount:
+                              currentStats?.relationshipCount ?? 0,
+                          });
+                        }
                       }}
-                    >
-                      <TableCell
-                        className={cn(
-                          "sticky left-0 z-20 bg-white border-r font-medium w-[200px] min-w-[200px] max-w-[200px] whitespace-normal break-words",
-                          hasError
-                            ? "text-red-600 dark:text-red-400"
-                            : "text-muted-foreground"
-                        )}
-                      >
-                        <div className="flex items-start gap-2">
-                          <div className="flex-shrink-0 flex items-center gap-1 mt-0.5">
-                            {isTesting && (
-                              <Loader2 className="h-3 w-3 text-blue-500 animate-spin" />
-                            )}
-                            {hasError && !isTesting && (
-                              <AlertCircle className="h-3 w-3 text-red-500" />
-                            )}
-                            {isSuccess && !hasError && !isTesting && (
-                              <CheckCircle2 className="h-3 w-3 text-green-500" />
-                            )}
-                          </div>
-                          <div className="flex-1 min-w-0">
-                            <span
-                              className={
-                                hasError ? "text-red-700 dark:text-red-300" : ""
-                              }
-                            >
-                              {table.TABLE_NAME}
-                            </span>
-                            {isSelected && (
-                              <Badge
-                                variant="outline"
-                                className={`text-xs font-semibold px-1.5 py-0.5 mt-1 block ${
-                                  isSelectedLeft
-                                    ? "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20"
-                                    : "bg-green-500/10 text-green-700 dark:text-green-300 border-green-500/20"
-                                }`}
-                              >
-                                {isSelectedLeft ? "1st" : "2nd"}
-                              </Badge>
-                            )}
-                          </div>
-                        </div>
-                      </TableCell>
-                      <TableCell
-                        className={cn(
-                          "w-[120px] min-w-[120px] max-w-[120px]",
-                          hasError
-                            ? "text-red-600 dark:text-red-400"
-                            : "text-muted-foreground"
-                        )}
-                      >
-                        {table.TABLE_SCHEMA}
-                      </TableCell>
-                      <TableCell
-                        className={cn(
-                          "w-[80px] min-w-[80px] max-w-[80px]",
-                          isTesting
-                            ? "bg-blue-500/10 text-blue-700 dark:text-blue-300 border-blue-500/20"
-                            : hasError
-                            ? "bg-red-500/10 text-red-700 dark:text-red-300 border-red-500/20"
-                            : isSuccess
-                            ? "bg-green-500/10 text-green-700 dark:text-green-300 border-green-500/20"
-                            : ""
-                        )}
-                      >
-                        {isTesting ? (
-                          <Badge variant="outline" className="text-xs">
-                            Testing
-                          </Badge>
-                        ) : hasError ? (
-                          <Badge variant="destructive" className="text-xs">
-                            Error
-                          </Badge>
-                        ) : isSuccess ? (
-                          <Badge
-                            variant="default"
-                            className="text-xs bg-green-500"
-                          >
-                            Success
-                          </Badge>
-                        ) : (
-                          <Badge variant="outline" className="text-xs">
-                            Idle
-                          </Badge>
-                        )}
-                      </TableCell>
-                      <TableCell
-                        className={cn(
-                          "w-[100px] min-w-[100px] max-w-[100px]",
-                          "text-right text-muted-foreground"
-                        )}
-                      >
-                        {hasStats && stats!.rowCount > 0 ? stats!.rowCount.toLocaleString() : (hasStats ? "0" : "-")}
-                      </TableCell>
-                      <TableCell
-                        className={cn(
-                          "w-[80px] min-w-[80px] max-w-[80px]",
-                          "text-right text-muted-foreground"
-                        )}
-                      >
-                        {hasStats && stats!.columnCount > 0 ? stats!.columnCount : (hasStats ? "0" : "-")}
-                      </TableCell>
-                      <TableCell
-                        className={cn(
-                          "w-[100px] min-w-[100px] max-w-[100px]",
-                          "text-right text-muted-foreground"
-                        )}
-                      >
-                        {hasStats && stats!.relationshipCount > 0 ? stats!.relationshipCount : (hasStats ? "0" : "-")}
-                      </TableCell>
-                      <TableCell
-                        className={`w-[80px] min-w-[80px] max-w-[80px] sticky text-center justify-center items-center right-0 z-10 bg-white border-l ${
-                          hasError
-                            ? "bg-red-50 dark:bg-red-950/20"
-                            : isSelectedLeft
-                            ? "bg-blue-500/10"
-                            : isSelectedRight
-                            ? "bg-green-500/10"
-                            : ""
-                        }`}
-                      >
-                        <div className="flex items-center gap-1 justify-center items-center">
-                          {onCompareTable && (
-                            <Button
-                              variant="ghost"
-                              size="icon-sm"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                logger.info(
-                                  "Table selected for comparison",
-                                  {
-                                    database: databaseName,
-                                    schema: table.TABLE_SCHEMA,
-                                    table: table.TABLE_NAME,
-                                  },
-                                  "TABLE_LIST"
-                                );
-                                onCompareTable({
-                                  databaseName,
-                                  schema: table.TABLE_SCHEMA,
-                                  table: table.TABLE_NAME,
-                                });
-                              }}
-                              className="h-6 w-6"
-                              title="Compare this table with another"
-                            >
-                              <GitCompare className="h-3 w-3" />
-                            </Button>
-                          )}
-                        </div>
-                        {/* Hidden components to test table and fetch stats */}
-                        <TableTester
-                          databaseName={databaseName}
-                          schema={table.TABLE_SCHEMA}
-                          table={table.TABLE_NAME}
-                          isTesting={testingTables.has(tableKey)}
-                          status={status}
-                          onStatusChange={(newStatus) => setTableStatus(table.TABLE_SCHEMA, table.TABLE_NAME, newStatus)}
-                          onErrorChange={(hasError) => setErrorTable(table.TABLE_SCHEMA, table.TABLE_NAME, hasError)}
-                          onTestingChange={(isTesting) => setTestingTable(table.TABLE_SCHEMA, table.TABLE_NAME, isTesting)}
-                          onStatsUpdate={(partialStats) => {
-                            // Update stats with columnCount from test response
-                            // Only update if we don't have stats yet or columnCount is 0
-                            const currentStats = getStats(table.TABLE_SCHEMA, table.TABLE_NAME, tables);
-                            if (!currentStats || currentStats.columnCount === 0) {
-                              setStats(table.TABLE_SCHEMA, table.TABLE_NAME, {
-                                rowCount: currentStats?.rowCount ?? 0,
-                                columnCount: partialStats.columnCount,
-                                relationshipCount: currentStats?.relationshipCount ?? 0,
-                              });
-                            }
-                          }}
-                        />
-                        <TableStatsFetcher
-                          databaseName={databaseName}
-                          schema={table.TABLE_SCHEMA}
-                          table={table.TABLE_NAME}
-                          status={status}
-                          tables={tables}
-                          onStatsFetched={(stats) => setStats(table.TABLE_SCHEMA, table.TABLE_NAME, stats)}
-                        />
-                      </TableCell>
-                    </TableRow>
+                      onStatsFetched={setStats}
+                      tables={tables}
+                    />
                   );
                 })
               ) : (

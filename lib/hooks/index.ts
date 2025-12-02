@@ -27,6 +27,7 @@ export * from './use-table-testing';
 export * from './use-table-stats-manager';
 export * from './use-table-list-state';
 export * from './use-comparison-loading-states';
+export * from './use-table-sorting';
 
 // Export types from legacy hooks (only exported types)
 export type { ForeignKeyInfo } from './use-database-query';

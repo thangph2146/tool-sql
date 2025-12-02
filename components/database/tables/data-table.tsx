@@ -22,14 +22,13 @@ import {
 } from "@/components/ui/table";
 import { TableCell as TableCellComponent } from "./table-cell";
 import { ReferenceColumnFilter } from "../filters";
-import { SingleSelectCombobox } from "../filters/single-select-combobox";
-import { useColumnFilterOptions } from "@/lib/hooks/use-column-filter-options";
+import { ColumnFilterSelect } from "./column-filter-select";
 import { normalizeColumnName } from "@/lib/utils/table-column-utils";
 import { cn } from "@/lib/utils";
 import type { DatabaseName } from "@/lib/db-config";
 import type { ForeignKeyInfo } from "@/lib/hooks/use-database-query";
-import { useDebounce } from "@/lib/hooks/use-debounce";
 import type { DuplicateGroup } from "@/lib/utils/data-quality-utils";
+import { useTableSorting } from "@/lib/hooks/use-table-sorting";
 
 interface DataTableProps {
   columns: string[];
@@ -87,120 +86,15 @@ function DataTableComponent({
   // Note: Flow logging is handled by parent component (TableDataView)
   // No need to create duplicate flow logs here
 
-  // Sort state - array of {column, order}
-  type SortConfig = { column: string; order: "alphabetical" | "reverse" | "newest" | "oldest" };
-  const [sortColumns, setSortColumns] = useState<SortConfig[]>([]);
-
-  // Handle column header click for sorting
-  const handleSort = (column: string) => {
-    setSortColumns((prev) => {
-      const existingIndex = prev.findIndex((s) => s.column === column);
-      if (existingIndex >= 0) {
-        // Remove if already exists
-        return prev.filter((_, i) => i !== existingIndex);
-      } else {
-        // Add new column with default alphabetical sort
-        return [...prev, { column, order: "alphabetical" }];
-      }
-    });
-  };
-
-  // Handle sort order change for a specific column
-  const handleSortOrderChange = (column: string, order: "alphabetical" | "reverse" | "newest" | "oldest") => {
-    setSortColumns((prev) =>
-      prev.map((s) => (s.column === column ? { ...s, order } : s))
-    );
-  };
-
-  // Remove sort for a column
-  const handleRemoveSort = (column: string) => {
-    setSortColumns((prev) => prev.filter((s) => s.column !== column));
-  };
-
-  // Sort rows based on multiple sortColumns
-  // Also create a mapping from original index to sorted index
-  const sortedRowsData = useMemo(() => {
-    if (sortColumns.length === 0) {
-      // No sorting, create identity map
-      const identityMap = new Map<number, number>();
-      rows.forEach((_, index) => identityMap.set(index, index));
-      return { sortedRows: rows, originalToSortedIndexMap: identityMap };
-    }
-
-    // Create array with original indices
-    const rowsWithIndices = rows.map((row, originalIndex) => ({
-      row,
-      originalIndex,
-    }));
-
-    // Sort with original indices preserved
-    const sorted = rowsWithIndices.sort((a, b) => {
-      // Sort by each column in order
-      for (const { column, order } of sortColumns) {
-        const aValue = a.row[column];
-        const bValue = b.row[column];
-
-        // Handle null/undefined values
-        if (aValue == null && bValue == null) continue;
-        if (aValue == null) return 1;
-        if (bValue == null) return -1;
-
-        let comparison = 0;
-
-        // Try date comparison first (for date columns)
-        const aDate = new Date(String(aValue));
-        const bDate = new Date(String(bValue));
-        if (!isNaN(aDate.getTime()) && !isNaN(bDate.getTime()) && aDate.getTime() !== 0 && bDate.getTime() !== 0) {
-          // Valid dates
-          comparison = aDate.getTime() - bDate.getTime();
-        } else {
-          // Try numeric comparison
-          const aNum = Number(aValue);
-          const bNum = Number(bValue);
-          if (!isNaN(aNum) && !isNaN(bNum)) {
-            comparison = aNum - bNum;
-          } else {
-            // String comparison
-            const aStr = String(aValue).toLowerCase();
-            const bStr = String(bValue).toLowerCase();
-            comparison = aStr.localeCompare(bStr, 'vi', { numeric: true, sensitivity: 'base' });
-          }
-        }
-
-        // Apply sort order
-        if (order === "reverse") {
-          // Reverse = Z-A (ngược)
-          comparison = -comparison;
-        } else if (order === "newest") {
-          // Newest = lớn nhất/cuối cùng lên đầu (reverse)
-          comparison = -comparison;
-        } else if (order === "oldest") {
-          // Oldest = nhỏ nhất/đầu tiên lên đầu (normal)
-          // Keep original comparison
-        }
-        // "alphabetical" keeps original comparison
-
-        // If not equal, return the comparison result
-        if (comparison !== 0) {
-          return comparison;
-        }
-        // If equal, continue to next sort column
-      }
-      return 0;
-    });
-
-    // Extract sorted rows and create mapping
-    const sortedRowsResult = sorted.map(item => item.row);
-    const indexMap = new Map<number, number>();
-    sorted.forEach((item, sortedIndex) => {
-      indexMap.set(item.originalIndex, sortedIndex);
-    });
-
-    return { sortedRows: sortedRowsResult, originalToSortedIndexMap: indexMap };
-  }, [rows, sortColumns]);
-
-  const sortedRows = sortedRowsData.sortedRows;
-  const originalToSortedIndexMap = sortedRowsData.originalToSortedIndexMap;
+  // Use custom hook for sorting
+  const {
+    sortColumns,
+    handleSort,
+    handleSortOrderChange,
+    handleRemoveSort,
+    sortedRows,
+    originalToSortedIndexMap,
+  } = useTableSorting(rows);
 
   // Map duplicate indices from original to sorted
   const duplicateRowIndices = useMemo(() => {
@@ -294,73 +188,6 @@ function DataTableComponent({
 
   // Note: Flow logging is handled by parent component (TableDataView)
   // Removed duplicate logging here to improve performance
-
-  // Component for column filter with options
-  const ColumnFilterSelect = ({
-    databaseName,
-    schemaName,
-    tableName,
-    columnName,
-    value,
-    onChange,
-    onClear,
-  }: {
-    databaseName: DatabaseName;
-    schemaName: string;
-    tableName: string;
-    columnName: string;
-    value: string;
-    onChange: (value: string) => void;
-    onClear: () => void;
-  }) => {
-    const [hasOpened, setHasOpened] = useState(false);
-    const [searchTerm, setSearchTerm] = useState("");
-    const debouncedSearch = useDebounce(searchTerm, 300);
-
-    // Load options when opened
-    const enabled = showFilters && hasOpened;
-    const { data: optionsData, isLoading } = useColumnFilterOptions(
-      {
-        databaseName,
-        schemaName,
-        tableName,
-        columnName,
-        includeReferences: false,
-        search: debouncedSearch,
-      },
-      enabled
-    );
-
-    const options = optionsData?.data.values ?? [];
-
-    return (
-      <SingleSelectCombobox
-        options={options}
-        value={value}
-        placeholder="Chọn giá trị..."
-        loading={isLoading && !debouncedSearch.trim()}
-        onChange={(val) => {
-          onChange(val);
-          setSearchTerm("");
-        }}
-        onClear={() => {
-          onClear();
-          setSearchTerm("");
-        }}
-        onSearchChange={(search) => {
-          setSearchTerm(search);
-        }}
-        onOpenChange={(isOpen) => {
-          if (isOpen && !hasOpened) {
-            setHasOpened(true);
-          }
-          if (!isOpen) {
-            setSearchTerm("");
-          }
-        }}
-      />
-    );
-  };
 
   return (
     <Table
@@ -477,6 +304,7 @@ function DataTableComponent({
                           tableName={tableName}
                           columnName={column}
                           value={filterValue}
+                          showFilters={showFilters}
                           onChange={(value) => onFilterChange(column, value)}
                           onClear={() => onClearFilter(column)}
                         />

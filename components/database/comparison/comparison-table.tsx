@@ -586,8 +586,7 @@ export function ComparisonTable({
         <div className="flex items-center justify-between gap-2">
           <div className="flex items-center gap-2 flex-wrap">
             <Database className="h-4 w-4 text-primary" />
-            <span className="text-sm font-semibold">{databaseName}</span>
-            <span className="text-xs text-muted-foreground">
+            <span className="text-xs font-semibold">
               {schemaName}.{tableName}
             </span>
             <span className="text-xs text-muted-foreground">
@@ -598,15 +597,6 @@ export function ComparisonTable({
                 • {relationships.length} relationship{relationships.length > 1 ? 's' : ''}
               </span>
             )}
-            {filters.hasActiveFilters && (
-              <span className="text-xs text-muted-foreground">
-                • Showing {effectiveFilteredRowCount} of {effectiveTotalRows} rows
-                {effectiveFilteredRowCount !== effectiveTotalRows && (
-                  <span className="text-primary"> (filtered)</span>
-                )}
-              </span>
-            )}
-            <br/>
             <DataQualityAlert
               duplicateGroups={duplicateGroups}
               duplicateIndexSet={duplicateRowIndices}
