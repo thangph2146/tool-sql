@@ -55,18 +55,27 @@ export function TableDataView({
   const [includeReferences, setIncludeReferences] = useState(true);
 
   // Flow logging with key-based lifecycle
-  const tableKey = `${databaseName}_${schemaName}_${tableName}`;
-  const { flowLog } = useFlowLoggerWithKey(
-    tableKey,
+  // Memoize flowName and metadata functions to prevent unnecessary flow restarts
+  const tableKey = useMemo(
+    () => `${databaseName}_${schemaName}_${tableName}`,
+    [databaseName, schemaName, tableName]
+  );
+  
+  const flowNameFn = useCallback(
     () => FLOW_NAMES.TABLE_DATA_VIEW(databaseName, schemaName, tableName),
+    [databaseName, schemaName, tableName]
+  );
+  
+  const metadataFn = useCallback(
     () => ({
       database: databaseName,
       schema: schemaName,
       table: tableName,
-      includeReferences,
-      limit,
-    })
+    }),
+    [databaseName, schemaName, tableName]
   );
+  
+  const { flowLog } = useFlowLoggerWithKey(tableKey, flowNameFn, metadataFn);
 
   // Log when view opens
   useEffect(() => {
@@ -191,6 +200,28 @@ export function TableDataView({
       }, 2000);
     }
   }, []);
+
+  // Memoized click handlers to prevent unnecessary re-renders
+  const handleToggleReferences = useCallback(() => {
+    const newValue = !includeReferences;
+    flowLog?.info("Include references toggled", {
+      includeReferences: newValue,
+      previousValue: includeReferences,
+    });
+    setIncludeReferences(newValue);
+  }, [includeReferences, flowLog]);
+
+  const handleToggleFilters = useCallback(() => {
+    const newShowFilters = !showFilters;
+    flowLog?.debug(
+      `${newShowFilters ? "Showing" : "Hiding"} filters for table: ${schemaName}.${tableName}`,
+      {
+        table: `${schemaName}.${tableName}`,
+        showFilters: newShowFilters,
+      }
+    );
+    setShowFilters(newShowFilters);
+  }, [showFilters, schemaName, tableName, flowLog, setShowFilters]);
 
   useEffect(() => {
     return () => {
@@ -447,7 +478,7 @@ export function TableDataView({
           <Field orientation="horizontal" className="gap-2 items-center">
             <FieldLabel
               className="text-xs cursor-pointer"
-              onClick={() => setIncludeReferences(!includeReferences)}
+              onClick={handleToggleReferences}
             >
               Show References
             </FieldLabel>
@@ -455,16 +486,7 @@ export function TableDataView({
               <input
                 type="checkbox"
                 checked={includeReferences}
-                onChange={(e) => {
-                  const newValue = e.target.checked;
-                  if (flowLog) {
-                    flowLog.info("Include references toggled", {
-                      includeReferences: newValue,
-                      previousValue: includeReferences,
-                    });
-                  }
-                  setIncludeReferences(newValue);
-                }}
+                onChange={handleToggleReferences}
                 className="h-4 w-4 rounded border-input"
               />
             </FieldContent>
@@ -501,22 +523,7 @@ export function TableDataView({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => {
-                    const newShowFilters = !showFilters;
-                    flowLog?.debug(
-                      `${
-                        newShowFilters ? "Showing" : "Hiding"
-                      } filters for table: ${schemaName}.${tableName}`,
-                      {
-                        database: databaseName,
-                        schema: schemaName,
-                        table: tableName,
-                        showFilters: newShowFilters,
-                        activeFilterCount,
-                      }
-                    );
-                    setShowFilters(newShowFilters);
-                  }}
+                  onClick={handleToggleFilters}
                   className="gap-2"
                 >
                   <Filter className="h-4 w-4" />

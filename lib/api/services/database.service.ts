@@ -130,7 +130,19 @@ export const databaseService = {
     schema: string,
     table: string,
     config?: string
-  ): Promise<{ success: boolean; accessible: boolean; error?: string }> => {
+  ): Promise<{
+    success: boolean;
+    message?: string;
+    data?: {
+      database: string;
+      schema: string;
+      table: string;
+      accessible: boolean;
+      hasData?: boolean;
+      columnsCount?: number;
+    };
+    error?: string;
+  }> => {
     const params = new URLSearchParams({
       database: databaseName,
       schema,
@@ -140,7 +152,15 @@ export const databaseService = {
 
     const response = await apiClient.get<{
       success: boolean;
-      accessible: boolean;
+      message?: string;
+      data?: {
+        database: string;
+        schema: string;
+        table: string;
+        accessible: boolean;
+        hasData?: boolean;
+        columnsCount?: number;
+      };
       error?: string;
     }>(`${API_ENDPOINTS.DB_TEST_TABLE}?${params.toString()}`);
     return response.data;

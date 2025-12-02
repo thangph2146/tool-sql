@@ -1,6 +1,6 @@
 "use client";
 
-import { useRef, useState, useMemo, useEffect, useCallback } from "react";
+import { useRef, useState, useMemo, useCallback, memo } from "react";
 import { Link2, ArrowUpDown, X, ChevronDown, ChevronRight } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -29,8 +29,6 @@ import { cn } from "@/lib/utils";
 import type { DatabaseName } from "@/lib/db-config";
 import type { ForeignKeyInfo } from "@/lib/hooks/use-database-query";
 import { useDebounce } from "@/lib/hooks/use-debounce";
-import { useFlowLoggerWithKey } from "@/lib/hooks/use-flow-logger";
-import { FLOW_NAMES } from "@/lib/constants/flow-constants";
 import type { DuplicateGroup } from "@/lib/utils/data-quality-utils";
 
 interface DataTableProps {
@@ -57,7 +55,7 @@ interface DataTableProps {
   style?: React.CSSProperties;
 }
 
-export function DataTable({
+function DataTableComponent({
   columns,
   rows,
   filters,
@@ -86,17 +84,8 @@ export function DataTable({
   // State to track expanded duplicate groups
   const [expandedDuplicateGroups, setExpandedDuplicateGroups] = useState<Set<string>>(new Set());
 
-  // Flow logging
-  const tableKey = `${databaseName}_${schemaName}_${tableName}`;
-  const { flowLog } = useFlowLoggerWithKey(
-    tableKey,
-    () => FLOW_NAMES.TABLE_DATA_VIEW(databaseName, schemaName, tableName),
-    () => ({
-      database: databaseName,
-      schema: schemaName,
-      table: tableName,
-    })
-  );
+  // Note: Flow logging is handled by parent component (TableDataView)
+  // No need to create duplicate flow logs here
 
   // Sort state - array of {column, order}
   type SortConfig = { column: string; order: "alphabetical" | "reverse" | "newest" | "oldest" };
@@ -303,43 +292,8 @@ export function DataTable({
     });
   }, []);
 
-  // Log when rows are filtered/sorted
-  useEffect(() => {
-    if (flowLog && rows.length > 0 && sortedRows.length > 0) {
-      const activeFiltersList = Object.entries(filters)
-        .filter(([, v]) => v?.trim() !== "")
-        .map(([col, val]) => ({ column: col, value: val }));
-      
-      const firstRow = sortedRows[0];
-      const firstRowKeys = Object.keys(firstRow);
-      
-      // Get data types and sample values for first 10 columns
-      const dataTypes = columns.slice(0, 10).map((col) => {
-        const value = firstRow[col];
-        return {
-          column: col,
-          type: value !== null && value !== undefined ? typeof value : "null",
-          sampleValue:
-            value !== null && value !== undefined
-              ? String(value).length > 50
-                ? String(value).substring(0, 50) + "..."
-                : String(value)
-              : null,
-        };
-      });
-      
-      flowLog.debug("Data table filtered/sorted", {
-        totalRows: rows.length,
-        sortedRowsCount: sortedRows.length,
-        sortColumns: sortColumns.map(s => ({ column: s.column, order: s.order })),
-        hasActiveFilters: activeFiltersList.length > 0,
-        activeFilters: activeFiltersList,
-        firstRowKeys,
-        dataTypes,
-      });
-    }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [flowLog, rows.length, sortedRows.length, sortColumns, filters, columns]);
+  // Note: Flow logging is handled by parent component (TableDataView)
+  // Removed duplicate logging here to improve performance
 
   // Component for column filter with options
   const ColumnFilterSelect = ({
@@ -442,6 +396,7 @@ export function DataTable({
                       className="h-5 w-5 ml-auto"
                       onClick={() => handleSort(column)}
                       type="button"
+                      aria-label={`Sort by ${column}`}
                     >
                       <ArrowUpDown className={cn("h-3 w-3", sortColumns.some(s => s.column === column) ? "opacity-100" : "opacity-50")} />
                     </Button>
@@ -606,6 +561,7 @@ export function DataTable({
                                 }
                               }}
                               type="button"
+                              aria-label={isExpanded ? "Collapse duplicates" : "Expand duplicates"}
                             >
                               {isExpanded ? (
                                 <ChevronDown className="h-3 w-3" />
@@ -710,4 +666,7 @@ export function DataTable({
     </Table>
   );
 }
+
+// Memoize DataTable to prevent unnecessary re-renders
+export const DataTable = memo(DataTableComponent);
 

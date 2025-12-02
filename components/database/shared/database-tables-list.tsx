@@ -39,7 +39,9 @@ import { getDatabaseConfig } from "@/lib/db-config";
 import { getMergedDatabaseConfig } from "@/lib/utils/db-config-storage";
 import { logger } from "@/lib/logger";
 import { TableDataView } from "../tables/table-data-view";
-import { useTestTable, useTableStats } from "@/lib/hooks/use-database-query";
+import { useTableTesting, useTableStatsManager, useTableListState } from "@/lib/hooks";
+import { TableTester } from "./table-tester";
+import { TableStatsFetcher } from "./table-stats-fetcher";
 import {
   Dialog,
   DialogContent,
@@ -48,13 +50,8 @@ import {
   DialogDescription,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import {
-  TABLE_LIST_LIMIT_OPTIONS,
-  DEFAULT_TABLE_LIST_LIMIT,
-  DEFAULT_TABLE_PAGE,
-} from "@/lib/constants/table-constants";
+import { TABLE_LIST_LIMIT_OPTIONS } from "@/lib/constants/table-constants";
 import { useDatabaseTables } from "@/lib/hooks/use-database-query";
-import { useDebounce } from "@/lib/hooks/use-debounce";
 
 interface TableInfo {
   TABLE_SCHEMA: string;
@@ -93,13 +90,20 @@ export function DatabaseTablesList({
     schema: string;
     table: string;
   } | null>(null);
-  const [filterText, setFilterText] = useState("");
-  // Pagination state
-  const [page, setPage] = useState(DEFAULT_TABLE_PAGE);
-  const [limit, setLimit] = useState(DEFAULT_TABLE_LIST_LIMIT);
 
-  // Debounce filter text to avoid too many API calls while typing
-  const debouncedFilterText = useDebounce(filterText, 500);
+  // Use custom hook for table list state (filter, pagination)
+  const {
+    filterText,
+    debouncedFilterText,
+    page,
+    limit,
+    setFilterText,
+    setPage,
+    setLimit,
+    handleClearFilter,
+    currentPage,
+    offset,
+  } = useTableListState();
 
   // Use hook to fetch tables with server-side filtering and pagination
   // Use debounced filter text for API calls
@@ -121,21 +125,27 @@ export function DatabaseTablesList({
 
   const isLoading = tablesLoading || propsIsLoading || false;
   const totalCount = tablesData?.data?.totalCount || tables.length;
-  // Track tables that have errors
-  const [errorTables, setErrorTables] = useState<Set<string>>(new Set());
-  // Track table status: 'idle' | 'testing' | 'success' | 'error'
-  const [tableStatuses, setTableStatuses] = useState<
-    Map<string, "idle" | "testing" | "success" | "error">
-  >(new Map());
-  // Track which tables are being tested
-  const [testingTables, setTestingTables] = useState<Set<string>>(new Set());
-  // Track table stats: row count, column count, relationship count
-  const [tableStats, setTableStats] = useState<
-    Map<
-      string,
-      { rowCount: number; columnCount: number; relationshipCount: number }
-    >
-  >(new Map());
+
+  // Recalculate totalPages with actual totalCount
+  const totalPages = useMemo(
+    () => Math.ceil(totalCount / limit) || 1,
+    [totalCount, limit]
+  );
+
+  // Use custom hooks for table testing and stats management
+  const {
+    tableStatuses,
+    errorTables,
+    testingTables,
+    testTable,
+    testAllTables,
+    hasTableError,
+    setTableStatus,
+    setErrorTable,
+    setTestingTable,
+  } = useTableTesting(databaseName);
+
+  const { getStats, setStats } = useTableStatsManager(databaseName);
 
   // Get database config to display actual database name
   // Start with base config to avoid hydration mismatch, then update with merged config on client
@@ -156,24 +166,6 @@ export function DatabaseTablesList({
   );
   const filteredCount = totalCount; // Total count after filtering (from API)
 
-  // Pagination calculations
-  const totalPages = useMemo(
-    () => Math.ceil(filteredCount / limit),
-    [filteredCount, limit]
-  );
-  const currentPage = useMemo(() => page + 1, [page]);
-  const offset = useMemo(() => page * limit, [page, limit]);
-
-  // Reset page when debounced filter changes (not when filterText changes immediately)
-  useEffect(() => {
-    setPage(0);
-  }, [debouncedFilterText]);
-
-  // Reset page when limit changes
-  useEffect(() => {
-    setPage(0);
-  }, [limit]);
-
   // Memoize display name
   const displayName = useMemo(() => {
     return (
@@ -183,49 +175,43 @@ export function DatabaseTablesList({
     );
   }, [dbConfig, databaseName]);
 
-  const handleTableClick = (schema: string, table: string) => {
-    logger.info(
-      "Table selected for viewing",
-      {
-        database: databaseName,
-        schema,
-        table,
-      },
-      "TABLE_LIST"
-    );
+  const handleTableClick = useCallback(
+    (schema: string, table: string) => {
+      logger.info(
+        "Table selected for viewing",
+        {
+          database: databaseName,
+          schema,
+          table,
+        },
+        "TABLE_LIST"
+      );
 
-    const tableKey = `${schema}.${table}`;
-    const status = tableStatuses.get(tableKey) || "idle";
+      const tableKey = `${schema}.${table}`;
+      const status = tableStatuses.get(tableKey) || "idle";
 
-    // Test table on click if not tested yet or has error
-    if (status === "idle" || status === "error") {
-      testTable(schema, table);
-    }
+      // Test table on click if not tested yet or has error
+      if (status === "idle" || status === "error") {
+        testTable(schema, table);
+      }
 
-    // Clear error state when user retries to view the table
-    if (errorTables.has(tableKey)) {
-      setErrorTables((prev) => {
-        const newSet = new Set(prev);
-        newSet.delete(tableKey);
-        return newSet;
-      });
-    }
-    setSelectedTable({ schema, table });
-  };
+      // Clear error state when user retries to view the table
+      if (errorTables.has(tableKey)) {
+        setErrorTable(schema, table, false);
+      }
+      setSelectedTable({ schema, table });
+    },
+    [databaseName, tableStatuses, testTable, errorTables, setErrorTable]
+  );
 
-  const handleCloseTableData = () => {
+  const handleCloseTableData = useCallback(() => {
     setSelectedTable(null);
-  };
-
-  const handleClearFilter = () => {
-    setFilterText("");
-  };
+  }, []);
 
   // Handle table error from TableDataView
   const handleTableError = useCallback(
     (schema: string, table: string) => {
-      const tableKey = `${schema}.${table}`;
-      setErrorTables((prev) => new Set(prev).add(tableKey));
+      setErrorTable(schema, table, true);
       logger.warn(
         "Table error detected",
         {
@@ -236,222 +222,16 @@ export function DatabaseTablesList({
         "TABLE_LIST"
       );
     },
-    [databaseName]
+    [databaseName, setErrorTable]
   );
 
-  // Check if a table has an error
-  const hasTableError = useCallback(
-    (schema: string, table: string) => {
-      const tableKey = `${schema}.${table}`;
-      return errorTables.has(tableKey);
-    },
-    [errorTables]
-  );
 
-  // Test a single table
-  const testTable = useCallback(
-    (schema: string, table: string) => {
-      const tableKey = `${schema}.${table}`;
-      if (testingTables.has(tableKey)) return; // Already testing
 
-      setTestingTables((prev) => new Set(prev).add(tableKey));
-      setTableStatuses((prev) => {
-        const newMap = new Map(prev);
-        newMap.set(tableKey, "testing");
-        return newMap;
-      });
-    },
-    [testingTables]
-  );
-
-  // Component to test individual table using API route
-  // Only test when explicitly triggered (click), not on hover
-  function TableTester({ schema, table }: { schema: string; table: string }) {
-    const tableKey = `${schema}.${table}`;
-    const isTesting = testingTables.has(tableKey);
-    const status = tableStatuses.get(tableKey) || "idle";
-
-    // Only enable test when explicitly testing (click) or retrying after error
-    const shouldTest = isTesting || status === "error";
-
-    const { data, error, isLoading } = useTestTable(
-      databaseName,
-      schema,
-      table,
-      shouldTest // Only enable when explicitly testing
-    );
-
-    useEffect(() => {
-      // Only process results when explicitly testing (click) or retrying after error
-      if (!shouldTest) return;
-
-      if (error) {
-        setTableStatuses((prev) => {
-          // Only update if status is not already 'error'
-          if (prev.get(tableKey) === "error") return prev;
-          const newMap = new Map(prev);
-          newMap.set(tableKey, "error");
-          return newMap;
-        });
-        setErrorTables((prev) => {
-          if (prev.has(tableKey)) return prev; // Already added
-          return new Set(prev).add(tableKey);
-        });
-        setTestingTables((prev) => {
-          if (!prev.has(tableKey)) return prev; // Already removed
-          const newSet = new Set(prev);
-          newSet.delete(tableKey);
-          return newSet;
-        });
-      } else if (data && !isLoading) {
-        const isAccessible = data.success && data.data.accessible;
-        const newStatus = isAccessible ? "success" : "error";
-
-        setTableStatuses((prev) => {
-          // Only update if status actually changed
-          if (prev.get(tableKey) === newStatus) return prev;
-          const newMap = new Map(prev);
-          newMap.set(tableKey, newStatus);
-          return newMap;
-        });
-
-        if (isAccessible) {
-          // Clear error if table is now working
-          setErrorTables((prev) => {
-            if (!prev.has(tableKey)) return prev; // Already cleared
-            const newSet = new Set(prev);
-            newSet.delete(tableKey);
-            return newSet;
-          });
-        } else {
-          setErrorTables((prev) => {
-            if (prev.has(tableKey)) return prev; // Already added
-            return new Set(prev).add(tableKey);
-          });
-        }
-
-        setTestingTables((prev) => {
-          if (!prev.has(tableKey)) return prev; // Already removed
-          const newSet = new Set(prev);
-          newSet.delete(tableKey);
-          return newSet;
-        });
-      }
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [
-      data?.success,
-      data?.data?.accessible,
-      error,
-      isLoading,
-      shouldTest,
-      tableKey,
-    ]);
-
-    return null; // This component doesn't render anything
-  }
-
-  // Component to fetch table stats (rows, columns, relationships)
-  // Only fetch if stats are not already available from API response
-  function TableStats({ schema, table }: { schema: string; table: string }) {
-    const tableKey = `${schema}.${table}`;
-    const status = tableStatuses.get(tableKey) || "idle";
-
-    // Check if stats are already available from API response
-    // Stats must be defined and not null (null means stats fetch failed)
-    const tableFromList = tables?.find(
-      (t) => t.TABLE_SCHEMA === schema && t.TABLE_NAME === table
-    );
-    const hasStatsFromApi =
-      tableFromList &&
-      tableFromList.rowCount !== undefined &&
-      tableFromList.rowCount !== null &&
-      tableFromList.columnCount !== undefined &&
-      tableFromList.columnCount !== null &&
-      tableFromList.relationshipCount !== undefined &&
-      tableFromList.relationshipCount !== null;
-
-    // Only fetch stats when table is successfully tested AND stats are not already available
-    const shouldFetchStats = status === "success" && !hasStatsFromApi;
-
-    const { data: statsData, error } = useTableStats(
-      databaseName,
-      schema,
-      table,
-      shouldFetchStats
-    );
-
-    useEffect(() => {
-      if (shouldFetchStats) {
-        if (statsData?.success && statsData.data) {
-          const newStats = {
-            rowCount: statsData.data.rowCount,
-            columnCount: statsData.data.columnCount,
-            relationshipCount: statsData.data.relationshipCount,
-          };
-
-          setTableStats((prev) => {
-            // Only update if stats actually changed
-            const existing = prev.get(tableKey);
-            if (
-              existing &&
-              existing.rowCount === newStats.rowCount &&
-              existing.columnCount === newStats.columnCount &&
-              existing.relationshipCount === newStats.relationshipCount
-            ) {
-              return prev; // No change, return same reference
-            }
-
-            logger.info(
-              "Table stats fetched successfully",
-              {
-                database: databaseName,
-                schema,
-                table,
-                stats: newStats,
-              },
-              "TABLE_LIST"
-            );
-
-            const newMap = new Map(prev);
-            newMap.set(tableKey, newStats);
-            return newMap;
-          });
-        } else if (error) {
-          // Log error but don't block UI
-          logger.warn(
-            "Failed to fetch table stats",
-            {
-              database: databaseName,
-              schema,
-              table,
-              error,
-            },
-            "TABLE_LIST"
-          );
-        }
-      }
-      // eslint-disable-next-line react-hooks/exhaustive-deps
-    }, [
-      shouldFetchStats,
-      statsData?.success,
-      statsData?.data?.rowCount,
-      statsData?.data?.columnCount,
-      statsData?.data?.relationshipCount,
-      tableKey,
-      error,
-      hasStatsFromApi,
-    ]);
-
-    return null; // This component doesn't render anything
-  }
-
-  // Test all tables
-  const testAllTables = useCallback(() => {
+  // Test all tables handler
+  const handleTestAllTables = useCallback(() => {
     if (!tables) return;
-    tables.forEach((table) => {
-      testTable(table.TABLE_SCHEMA, table.TABLE_NAME);
-    });
-  }, [tables, testTable]);
+    testAllTables(tables);
+  }, [tables, testAllTables]);
 
   return (
     <div className="mt-4 pt-4">
@@ -472,7 +252,7 @@ export function DatabaseTablesList({
           {tables && !isLoading && (
             <>
               <Button
-                onClick={testAllTables}
+                onClick={handleTestAllTables}
                 variant="ghost"
                 size="sm"
                 title="Test all tables"
@@ -581,39 +361,20 @@ export function DatabaseTablesList({
                       table.TABLE_SCHEMA &&
                     selectedForComparison?.right?.table === table.TABLE_NAME;
                   const isSelected = isSelectedLeft || isSelectedRight;
-                  const hasError = hasTableError(
-                    table.TABLE_SCHEMA,
-                    table.TABLE_NAME
-                  );
                   const tableKey = `${table.TABLE_SCHEMA}.${table.TABLE_NAME}`;
                   const status = tableStatuses.get(tableKey) || "idle";
                   const isTesting = status === "testing";
                   const isSuccess = status === "success";
+                  // hasError: status is "error" OR table is in errorTables Set
+                  // But if status is "success", we trust the status over errorTables
+                  const hasError = status === "error" || (status !== "success" && hasTableError(
+                    table.TABLE_SCHEMA,
+                    table.TABLE_NAME
+                  ));
                   // Use stats from API response if available, otherwise use fetched stats
-                  // Check if stats are available and not null (null means stats fetch failed)
-                  const hasStatsFromApi =
-                    table.rowCount !== undefined &&
-                    table.rowCount !== null &&
-                    table.columnCount !== undefined &&
-                    table.columnCount !== null &&
-                    table.relationshipCount !== undefined &&
-                    table.relationshipCount !== null;
-                  const statsFromApi = hasStatsFromApi
-                    ? {
-                        rowCount: table.rowCount!,
-                        columnCount: table.columnCount!,
-                        relationshipCount: table.relationshipCount!,
-                      }
-                    : null;
-                  const stats = statsFromApi || tableStats.get(tableKey);
-                  const hasStats =
-                    stats &&
-                    stats.rowCount !== null &&
-                    stats.rowCount !== undefined &&
-                    stats.columnCount !== null &&
-                    stats.columnCount !== undefined &&
-                    stats.relationshipCount !== null &&
-                    stats.relationshipCount !== undefined;
+                  // Allow partial stats (show what we have, even if some values are 0)
+                  const stats = getStats(table.TABLE_SCHEMA, table.TABLE_NAME, tables);
+                  const hasStats = stats !== null;
 
                   return (
                     <TableRow
@@ -723,7 +484,7 @@ export function DatabaseTablesList({
                           "text-right text-muted-foreground"
                         )}
                       >
-                        {hasStats ? stats!.rowCount.toLocaleString() : "-"}
+                        {hasStats && stats!.rowCount > 0 ? stats!.rowCount.toLocaleString() : (hasStats ? "0" : "-")}
                       </TableCell>
                       <TableCell
                         className={cn(
@@ -731,7 +492,7 @@ export function DatabaseTablesList({
                           "text-right text-muted-foreground"
                         )}
                       >
-                        {hasStats ? stats!.columnCount : "-"}
+                        {hasStats && stats!.columnCount > 0 ? stats!.columnCount : (hasStats ? "0" : "-")}
                       </TableCell>
                       <TableCell
                         className={cn(
@@ -739,7 +500,7 @@ export function DatabaseTablesList({
                           "text-right text-muted-foreground"
                         )}
                       >
-                        {hasStats ? stats!.relationshipCount : "-"}
+                        {hasStats && stats!.relationshipCount > 0 ? stats!.relationshipCount : (hasStats ? "0" : "-")}
                       </TableCell>
                       <TableCell
                         className={`w-[80px] min-w-[80px] max-w-[80px] sticky text-center justify-center items-center right-0 z-10 bg-white border-l ${
@@ -783,12 +544,34 @@ export function DatabaseTablesList({
                         </div>
                         {/* Hidden components to test table and fetch stats */}
                         <TableTester
+                          databaseName={databaseName}
                           schema={table.TABLE_SCHEMA}
                           table={table.TABLE_NAME}
+                          isTesting={testingTables.has(tableKey)}
+                          status={status}
+                          onStatusChange={(newStatus) => setTableStatus(table.TABLE_SCHEMA, table.TABLE_NAME, newStatus)}
+                          onErrorChange={(hasError) => setErrorTable(table.TABLE_SCHEMA, table.TABLE_NAME, hasError)}
+                          onTestingChange={(isTesting) => setTestingTable(table.TABLE_SCHEMA, table.TABLE_NAME, isTesting)}
+                          onStatsUpdate={(partialStats) => {
+                            // Update stats with columnCount from test response
+                            // Only update if we don't have stats yet or columnCount is 0
+                            const currentStats = getStats(table.TABLE_SCHEMA, table.TABLE_NAME, tables);
+                            if (!currentStats || currentStats.columnCount === 0) {
+                              setStats(table.TABLE_SCHEMA, table.TABLE_NAME, {
+                                rowCount: currentStats?.rowCount ?? 0,
+                                columnCount: partialStats.columnCount,
+                                relationshipCount: currentStats?.relationshipCount ?? 0,
+                              });
+                            }
+                          }}
                         />
-                        <TableStats
+                        <TableStatsFetcher
+                          databaseName={databaseName}
                           schema={table.TABLE_SCHEMA}
                           table={table.TABLE_NAME}
+                          status={status}
+                          tables={tables}
+                          onStatsFetched={(stats) => setStats(table.TABLE_SCHEMA, table.TABLE_NAME, stats)}
                         />
                       </TableCell>
                     </TableRow>

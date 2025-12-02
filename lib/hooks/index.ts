@@ -23,6 +23,9 @@ export * from './use-column-filter-options';
 export * from './use-comparison-data';
 export * from './use-row-synchronization';
 export * from './use-joined-data-maps';
+export * from './use-table-testing';
+export * from './use-table-stats-manager';
+export * from './use-table-list-state';
 
 // Export types from legacy hooks (only exported types)
 export type { ForeignKeyInfo } from './use-database-query';

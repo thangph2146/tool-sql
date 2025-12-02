@@ -429,16 +429,17 @@ export function useTestTable(
       const response = await databaseService.testTable(databaseName, schemaName, tableName, config || undefined);
       
       // Transform response to match expected format
+      // API response already has the correct structure with data.columnsCount
       return {
         success: response.success,
-        message: response.success ? 'Table is accessible' : response.error || 'Table is not accessible',
+        message: response.message || (response.success ? 'Table is accessible' : response.error || 'Table is not accessible'),
         data: {
-          database: databaseName,
-          schema: schemaName,
-          table: tableName,
-          accessible: response.accessible,
-          hasData: response.accessible, // Assume has data if accessible
-          columnsCount: 0, // Not provided by service
+          database: response.data?.database || databaseName,
+          schema: response.data?.schema || schemaName,
+          table: response.data?.table || tableName,
+          accessible: response.data?.accessible ?? response.success,
+          hasData: response.data?.hasData ?? (response.data?.accessible ?? false),
+          columnsCount: response.data?.columnsCount ?? 0,
         },
         error: response.error,
       };

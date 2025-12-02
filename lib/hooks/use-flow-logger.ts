@@ -189,7 +189,8 @@ export function useFlowLoggerWithKey<T extends string | number>(
       });
     }
 
-    // Start new flow if not exists or key changed
+    // Start new flow only if not exists or key actually changed
+    // Check currentKeyRef to ensure we don't create duplicate flows
     if (!flowLogRef.current || flowIdRef.current === null || (keyChanged && currentKeyRef.current !== currentKey)) {
       const name = flowNameRef.current(currentKey);
       const meta = metadataRef.current ? metadataRef.current(currentKey) : undefined;
@@ -206,8 +207,11 @@ export function useFlowLoggerWithKey<T extends string | number>(
       });
     } else {
       // Update refs even if we didn't create a new flow
-      previousKeyRef.current = key;
-      previousEnabledRef.current = enabled;
+      // Only update if key actually changed (not just on every render)
+      if (!keyChanged) {
+        previousKeyRef.current = key;
+        previousEnabledRef.current = enabled;
+      }
     }
 
     // No cleanup function - let the effect body handle all flow lifecycle
