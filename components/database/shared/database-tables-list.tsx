@@ -101,7 +101,7 @@ export function DatabaseTablesList({
 
   // Use hook to fetch tables with server-side filtering and pagination
   // Use debounced filter text for API calls
-  // Use select to only subscribe to data we need
+  // select option is already applied in useDatabaseTables hook
   const { data: tablesData, isLoading: tablesLoading } = useDatabaseTables(
     databaseName,
     true, // enabled
@@ -114,14 +114,15 @@ export function DatabaseTablesList({
   );
 
   // Use data from hook if available, otherwise fall back to props (for backward compatibility)
+  // tablesData is already selected, so it has { tables, totalCount, count, page, limit }
   const tables = useMemo((): TableInfo[] => {
-    return (tablesData?.data?.tables || propsTables || []) as TableInfo[];
-  }, [tablesData?.data?.tables, propsTables]);
+    return (tablesData?.tables || propsTables || []) as TableInfo[];
+  }, [tablesData?.tables, propsTables]);
 
   const isLoading = tablesLoading || propsIsLoading || false;
   const totalCount = useMemo(
-    () => tablesData?.data?.totalCount || tables.length,
-    [tablesData?.data?.totalCount, tables.length]
+    () => tablesData?.totalCount ?? tables.length,
+    [tablesData?.totalCount, tables.length]
   );
 
   // Recalculate totalPages with actual totalCount
@@ -230,6 +231,21 @@ export function DatabaseTablesList({
     if (!tables) return;
     testAllTables(tables);
   }, [tables, testAllTables]);
+
+  // Memoize stats update handler to prevent unnecessary re-renders
+  const handleStatsUpdate = useCallback(
+    (schema: string, table: string, partialStats: { columnCount: number }) => {
+      const currentStats = getStats(schema, table, tables);
+      if (!currentStats || currentStats.columnCount === 0) {
+        setStats(schema, table, {
+          rowCount: currentStats?.rowCount ?? 0,
+          columnCount: partialStats.columnCount,
+          relationshipCount: currentStats?.relationshipCount ?? 0,
+        });
+      }
+    },
+    [getStats, setStats, tables]
+  );
 
   return (
     <div className="mt-4 pt-4">
@@ -377,17 +393,7 @@ export function DatabaseTablesList({
                       onStatusChange={setTableStatus}
                       onErrorChange={setErrorTable}
                       onTestingChange={setTestingTable}
-                      onStatsUpdate={(schema, table, partialStats) => {
-                        const currentStats = getStats(schema, table, tables);
-                        if (!currentStats || currentStats.columnCount === 0) {
-                          setStats(schema, table, {
-                            rowCount: currentStats?.rowCount ?? 0,
-                            columnCount: partialStats.columnCount,
-                            relationshipCount:
-                              currentStats?.relationshipCount ?? 0,
-                          });
-                        }
-                      }}
+                      onStatsUpdate={handleStatsUpdate}
                       onStatsFetched={setStats}
                       tables={tables}
                     />

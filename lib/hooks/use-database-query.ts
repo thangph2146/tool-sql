@@ -146,7 +146,20 @@ export function useDatabaseConnection(databaseName?: DatabaseName, enabled: bool
 }
 
 /**
+ * Selector functions for useDatabaseTables to optimize re-renders
+ * Using stable function references as recommended by TanStack Query
+ */
+const selectTablesData = (data: Awaited<ReturnType<typeof databaseService.getTables>>) => ({
+  tables: data?.data?.tables ?? [],
+  totalCount: data?.data?.totalCount ?? 0,
+  count: data?.data?.count ?? 0,
+  page: data?.data?.page ?? 0,
+  limit: data?.data?.limit ?? 0,
+});
+
+/**
  * Hook to get database tables
+ * Optimized with select option to prevent unnecessary re-renders
  */
 export function useDatabaseTables(
   databaseName?: DatabaseName,
@@ -236,6 +249,8 @@ export function useDatabaseTables(
     refetchOnMount: false,
     refetchOnWindowFocus: false,
     retry: API_RETRY_COUNT,
+    // Use select to only subscribe to data we need, preventing unnecessary re-renders
+    select: selectTablesData,
   });
 }
 
