@@ -19,6 +19,11 @@ export * from './use-table-filters';
 export * from './use-table-pagination';
 export * from './use-column-filter-options';
 
+// Comparison hooks (extracted from table-comparison-view)
+export * from './use-comparison-data';
+export * from './use-row-synchronization';
+export * from './use-joined-data-maps';
+
 // Export types from legacy hooks (only exported types)
 export type { ForeignKeyInfo } from './use-database-query';
 

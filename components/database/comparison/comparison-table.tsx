@@ -248,7 +248,7 @@ export function ComparisonTable({
     });
 
     return { sortedRows: sortedRowsResult, originalToSortedIndexMap: indexMap };
-  }, [rows, sortColumns, combinedColumns, columnsToCompare.length, joinedDataMap]);
+  }, [rows, sortColumns, combinedColumns, columnsToCompare.length, joinedDataMap, allJoinedDataMaps, currentTableInfo]);
 
   const sortedRows = sortedRowsData.sortedRows;
   const originalToSortedIndexMap = sortedRowsData.originalToSortedIndexMap;

@@ -7,6 +7,7 @@ import { useTableData, useTableRelationships } from "@/lib/hooks/use-database-qu
 import { useTableFilters } from "@/lib/hooks/use-table-filters";
 import { useTableComparison } from "@/lib/hooks/use-table-comparison";
 import { useTablePagination } from "@/lib/hooks/use-table-pagination";
+import { useComparisonStore } from "@/lib/stores";
 import {
   Dialog,
   DialogContent,
@@ -20,7 +21,6 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { ComparisonTable } from "./comparison-table";
 import { ComparisonLoadingState } from "./comparison-loading-state";
-import { DEFAULT_TABLE_LIMIT } from "@/lib/constants/table-constants";
 import { getColumnsToDisplay } from "@/lib/utils/table-column-utils";
 import { sortRelationships } from "@/lib/utils/relationship-utils";
 import { analyzeDataQuality } from "@/lib/utils/data-quality-utils";
@@ -56,13 +56,31 @@ export function TableComparisonView({
   asDialog = false,
   onTableChange,
 }: TableComparisonViewProps) {
-  const [leftLimit, setLeftLimit] = useState(DEFAULT_TABLE_LIMIT);
-  const [rightLimit, setRightLimit] = useState(DEFAULT_TABLE_LIMIT);
-  const [showLeftFilters, setShowLeftFilters] = useState(false);
-  const [showRightFilters, setShowRightFilters] = useState(false);
-  const [includeReferences, setIncludeReferences] = useState(true);
-  const [combinedColumns, setCombinedColumns] = useState<CombinedColumn[]>([]);
-  const [showSummaryDialog, setShowSummaryDialog] = useState(false);
+  // Use Zustand store for comparison state
+  const {
+    leftLimit,
+    rightLimit,
+    showLeftFilters,
+    showRightFilters,
+    includeReferences,
+    combinedColumns,
+    showSummaryDialog,
+    leftColumnPriorities,
+    rightColumnPriorities,
+    leftSortOrder,
+    rightSortOrder,
+    setLeftLimit,
+    setRightLimit,
+    setShowLeftFilters,
+    setShowRightFilters,
+    setIncludeReferences,
+    setCombinedColumns,
+    setShowSummaryDialog,
+    setLeftColumnPriorities,
+    setRightColumnPriorities,
+    setLeftSortOrder,
+    setRightSortOrder,
+  } = useComparisonStore();
 
   // Flow logging with key-based lifecycle (only when open)
   const comparisonKey = open
@@ -222,17 +240,13 @@ export function TableComparisonView({
   const leftPagination = useTablePagination({
     totalRows: leftTotalRows,
     limit: leftLimit,
-    onLimitChange: useCallback((newLimit: number) => {
-      setLeftLimit(newLimit);
-    }, []),
+    onLimitChange: setLeftLimit, // Zustand actions are stable
   });
 
   const rightPagination = useTablePagination({
     totalRows: rightTotalRows,
     limit: rightLimit,
-    onLimitChange: useCallback((newLimit: number) => {
-      setRightLimit(newLimit);
-    }, []),
+    onLimitChange: setRightLimit, // Zustand actions are stable
   });
 
   // Fetch paginated data when offset changes (only if offset > 0 to avoid duplicate call)
@@ -337,11 +351,11 @@ export function TableComparisonView({
   // Validate combined columns
   const validatedCombinedColumns = useMemo(() => {
     const leftValid = validateCombinedColumns(
-      combinedColumns.filter(c => c.side === "left"),
+      combinedColumns.filter((c: CombinedColumn) => c.side === "left"),
       leftTableColumns
     );
     const rightValid = validateCombinedColumns(
-      combinedColumns.filter(c => c.side === "right"),
+      combinedColumns.filter((c: CombinedColumn) => c.side === "right"),
       rightTableColumns
     );
     
@@ -371,11 +385,7 @@ export function TableComparisonView({
   const [leftColumnsUserModified, setLeftColumnsUserModified] = useState(false);
   const [rightColumnsUserModified, setRightColumnsUserModified] = useState(false);
   
-  // Track column priorities and sort order for left and right tables
-  const [leftColumnPriorities, setLeftColumnPriorities] = useState<Map<string, number>>(new Map());
-  const [rightColumnPriorities, setRightColumnPriorities] = useState<Map<string, number>>(new Map());
-  const [leftSortOrder, setLeftSortOrder] = useState<"alphabetical" | "newest" | "oldest">("alphabetical");
-  const [rightSortOrder, setRightSortOrder] = useState<"alphabetical" | "newest" | "oldest">("alphabetical");
+  // Column priorities and sort orders are now in Zustand store
 
   // Get columns to compare (only columns that exist in both tables and are selected in both)
   // Get columns to display for left table (only from left table's selected columns)
@@ -1178,18 +1188,18 @@ export function TableComparisonView({
   // Log when combined columns change
   useEffect(() => {
     if (flowLog && open && combinedColumns.length > 0) {
-      const leftCombined = combinedColumns.filter(c => c.side === "left");
-      const rightCombined = combinedColumns.filter(c => c.side === "right");
+      const leftCombined = combinedColumns.filter((c: CombinedColumn) => c.side === "left");
+      const rightCombined = combinedColumns.filter((c: CombinedColumn) => c.side === "right");
       flowLog.info('Combined columns updated', {
         totalCombined: combinedColumns.length,
-        leftCombined: leftCombined.map(c => ({
+        leftCombined: leftCombined.map((c: CombinedColumn) => ({
           name: c.name,
           sourceColumns: [...c.sourceColumns].sort(),
-        })).sort((a, b) => a.name.localeCompare(b.name)),
-        rightCombined: rightCombined.map(c => ({
+        })).sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name)),
+        rightCombined: rightCombined.map((c: CombinedColumn) => ({
           name: c.name,
           sourceColumns: [...c.sourceColumns].sort(),
-        })).sort((a, b) => a.name.localeCompare(b.name)),
+        })).sort((a: { name: string }, b: { name: string }) => a.name.localeCompare(b.name)),
       });
     }
   }, [combinedColumns, flowLog, open]);

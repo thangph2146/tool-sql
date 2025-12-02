@@ -50,10 +50,28 @@ export interface TablesResponse {
 
 export interface TableDataResponse {
   success: boolean;
+  message?: string;
   data: {
+    database: DatabaseName;
+    schema: string;
+    table: string;
     rows: Record<string, unknown>[];
     columns: string[];
     totalRows: number;
+    hasMore: boolean;
+    limit: number;
+    offset: number;
+    filteredRowCount?: number;
+    filtersApplied?: Record<string, string>;
+    relationships?: Array<{
+      FK_NAME: string;
+      FK_SCHEMA: string;
+      FK_TABLE: string;
+      FK_COLUMN: string;
+      PK_SCHEMA: string;
+      PK_TABLE: string;
+      PK_COLUMN: string;
+    }>;
     summary?: {
       rowCount: number;
       columnCount: number;
@@ -64,13 +82,19 @@ export interface TableDataResponse {
 
 export interface TableRelationshipsResponse {
   success: boolean;
+  message?: string;
   data: {
+    database: DatabaseName;
+    schema: string;
+    table: string;
     relationships: Array<{
-      name: string;
-      referencedTable: string;
-      referencedSchema: string;
-      referencedColumn: string;
-      referencingColumn: string;
+      FK_NAME: string;
+      FK_SCHEMA: string;
+      FK_TABLE: string;
+      FK_COLUMN: string;
+      PK_SCHEMA: string;
+      PK_TABLE: string;
+      PK_COLUMN: string;
     }>;
   };
   error?: string;
@@ -131,6 +155,7 @@ export const databaseService = {
       page?: number;
       limit?: number;
       includeStats?: boolean;
+      filterText?: string;
       config?: string;
     }
   ): Promise<TablesResponse> => {
@@ -139,6 +164,7 @@ export const databaseService = {
       ...(options?.page !== undefined && { page: String(options.page) }),
       ...(options?.limit !== undefined && { limit: String(options.limit) }),
       ...(options?.includeStats && { includeStats: 'true' }),
+      ...(options?.filterText && { filterText: options.filterText }),
       ...(options?.config && { config: options.config }),
     });
 

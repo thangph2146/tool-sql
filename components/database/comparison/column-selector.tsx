@@ -527,7 +527,7 @@ export function ColumnSelector({
   }, [selectedJoinTable]);
 
   // Fetch columns for selected table from API if it's not the other side table
-  const { data: selectedTableData, isLoading: isLoadingSelectedTableColumns } = useTableData(
+  const { data: selectedTableData } = useTableData(
     databaseName as DatabaseName | undefined,
     selectedTableInfo?.schema,
     selectedTableInfo?.table,

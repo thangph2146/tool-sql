@@ -6,4 +6,5 @@
 export * from './use-database-store';
 export * from './use-ui-store';
 export * from './use-table-store';
+export * from './use-comparison-store';
 
